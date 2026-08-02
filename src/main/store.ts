@@ -7,42 +7,39 @@ interface StoreData {
   projects: Project[]
 }
 
-const DEFAULT_DATA: StoreData = { projects: [] }
-
 export interface Store {
   listProjects: () => Project[]
   getProject: (id: string) => Project | undefined
   createProject: (input: { title: string; source: Project['source']; sourceUrl?: string; localPath?: string }) => Project
   updateProject: (id: string, patch: Partial<Omit<Project, 'id' | 'createdAt'>>) => void
   deleteProject: (id: string) => void
-  getData: () => StoreData
 }
 
 export function createStore(): Store {
-  const file = join(app.getPath('userData'), 'store.json')
+  const userDataDir = app.getPath('userData')
+  const file = join(userDataDir, 'store.json')
 
-  let data: StoreData = DEFAULT_DATA
+  let data: StoreData = { projects: [] }
   if (existsSync(file)) {
     try {
       data = JSON.parse(readFileSync(file, 'utf-8')) as StoreData
     } catch {
-      data = DEFAULT_DATA
+      data = { projects: [] }
     }
   }
 
   const persist = (): void => {
-    mkdirSync(join(app.getPath('userData')), { recursive: true })
+    mkdirSync(userDataDir, { recursive: true })
     writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8')
   }
 
   return {
-    getData: () => data,
-
     listProjects: () => data.projects,
 
     getProject: (id) => data.projects.find((p) => p.id === id),
 
     createProject: (input) => {
+      const now = new Date().toISOString()
       const project: Project = {
         id: crypto.randomUUID(),
         title: input.title,
@@ -51,8 +48,8 @@ export function createStore(): Store {
         localPath: input.localPath ?? null,
         stage: 'queued',
         progress: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        createdAt: now,
+        updatedAt: now
       }
       data.projects.unshift(project)
       persist()

@@ -1,9 +1,7 @@
 import type {
   AppConfig,
   IpcResult,
-  ProgressPayload,
-  Project,
-  SummaryDoc
+  ProgressPayload
 } from '@shared/types'
 
 async function invoke<T>(fn: () => Promise<IpcResult<T>>): Promise<T> {
@@ -27,5 +25,3 @@ export const client = {
   getSummary: (id: string) => invoke(() => window.api.getSummary(id)),
   onProgress: (cb: (payload: ProgressPayload) => void): (() => void) => window.api.onProgress(cb)
 }
-
-export type { Project, SummaryDoc, ProgressPayload }

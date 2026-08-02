@@ -1,8 +1,8 @@
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
-import type { Project } from '@shared/types'
+import type { PipelineStage, Project } from '@shared/types'
 
-const STAGE_LABEL: Record<string, string> = {
+const STAGE_LABEL: Partial<Record<PipelineStage, string>> = {
   queued: '排队中',
   downloading: '下载中',
   extracting: '提取音频',
@@ -12,7 +12,7 @@ const STAGE_LABEL: Record<string, string> = {
   failed: '失败'
 }
 
-const STAGE_COLOR: Record<string, string> = {
+const STAGE_COLOR: Partial<Record<PipelineStage, string>> = {
   queued: 'text-[#8a93a5] bg-[#1a1f29]',
   downloading: 'text-sky-300 bg-sky-500/10',
   extracting: 'text-sky-300 bg-sky-500/10',
@@ -22,11 +22,13 @@ const STAGE_COLOR: Record<string, string> = {
   failed: 'text-rose-300 bg-rose-500/10'
 }
 
+const IN_PROGRESS_STAGES = new Set<PipelineStage>(['downloading', 'extracting', 'transcribing', 'summarizing'])
+
 function ProgressBar({ project }: { project: Project }): React.JSX.Element {
   if (project.stage === 'done') return <span className="text-xs text-emerald-400">已完成</span>
   if (project.stage === 'failed') return <span className="text-xs text-rose-400">失败</span>
 
-  const pct = Math.max(project.progress, project.stage === 'extracting' ? 5 : project.progress)
+  const pct = project.stage === 'extracting' ? Math.max(project.progress, 5) : project.progress
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-28 overflow-hidden rounded-full bg-[#1a1f29]">
@@ -65,8 +67,7 @@ export default function LibraryPage(): React.JSX.Element {
     }
   }
 
-  const isInProgress = (stage: Project['stage']): boolean =>
-    stage === 'downloading' || stage === 'extracting' || stage === 'transcribing' || stage === 'summarizing'
+  const isInProgress = (stage: Project['stage']): boolean => IN_PROGRESS_STAGES.has(stage)
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-10">

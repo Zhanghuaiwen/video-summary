@@ -45,6 +45,13 @@ export interface AppConfig {
   llmBaseUrl: string
 }
 
+export const DEFAULT_CONFIG: AppConfig = {
+  apiKey: '',
+  asrModel: 'FunAudioLLM/SenseVoiceSmall',
+  llmModel: 'Qwen/Qwen2.5-7B-Instruct',
+  llmBaseUrl: 'https://api.siliconflow.cn/v1'
+}
+
 export interface ProgressPayload {
   projectId: string
   stage: PipelineStage

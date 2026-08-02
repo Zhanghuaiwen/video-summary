@@ -56,7 +56,8 @@ video-summary/
 │  │  ├─ components/           # Sidebar / SettingsModal
 │  │  ├─ store/                # Zustand 状态
 │  │  └─ api/client.ts         # IPC 调用封装
-│  └─ shared/types.ts          # 主/渲染共享类型与 IPC 通道常量
+│  └─ shared/types.ts          # 主/渲染共享类型、IPC 通道常量与默认配置
+│  └─ shared/errors.ts         # 通用错误消息归一化工具
 ├─ resources/                  # 内置二进制（yt-dlp.exe）
 ├─ electron.vite.config.ts
 └─ package.json

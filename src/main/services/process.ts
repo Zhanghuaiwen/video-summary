@@ -11,6 +11,13 @@ export interface RunResult {
   stderr: string
 }
 
+function emitLines(text: string, cb: ((line: string) => void) | undefined): void {
+  if (!cb) return
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim()) cb(line)
+  }
+}
+
 export function runCommand(cmd: string, args: string[], callbacks?: RunCallbacks): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true })
@@ -18,12 +25,14 @@ export function runCommand(cmd: string, args: string[], callbacks?: RunCallbacks
     let stderr = ''
 
     child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString()
-      for (const line of d.toString().split(/\r?\n/)) if (line.trim()) callbacks?.onStdout?.(line)
+      const chunk = d.toString()
+      stdout += chunk
+      emitLines(chunk, callbacks?.onStdout)
     })
     child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString()
-      for (const line of d.toString().split(/\r?\n/)) if (line.trim()) callbacks?.onStderr?.(line)
+      const chunk = d.toString()
+      stderr += chunk
+      emitLines(chunk, callbacks?.onStderr)
     })
     child.on('error', reject)
     child.on('close', (code) => {

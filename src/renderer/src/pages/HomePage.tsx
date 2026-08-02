@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
+import { toErrorMessage } from '@shared/errors'
 
 type SourceMode = 'link' | 'file'
 
@@ -19,6 +20,8 @@ export default function HomePage(): React.JSX.Element {
   const config = useAppStore((s) => s.config)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const setProjects = useAppStore((s) => s.setProjects)
+  const setSelectedProject = useAppStore((s) => s.setSelectedProject)
+  const setPage = useAppStore((s) => s.setPage)
 
   const pickFile = async (): Promise<void> => {
     const path = await client.pickVideo()
@@ -47,10 +50,10 @@ export default function HomePage(): React.JSX.Element {
       await client.startProject(project.id)
       const projects = await client.listProjects()
       setProjects(projects)
-      useAppStore.getState().setSelectedProject(project.id)
-      useAppStore.getState().setPage('library')
+      setSelectedProject(project.id)
+      setPage('library')
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(toErrorMessage(err))
     } finally {
       setBusy(false)
     }

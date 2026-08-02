@@ -41,7 +41,6 @@ export async function downloadAudio(url: string, workDir: string, onProgress: (p
     }
   )
   const match = res.stdout.match(/Destination:\s+(.+?)\r?$|has already been downloaded/m)
-  const dest = match ? match[1].trim() : ''
-  if (dest) return dest
-  return join(workDir, 'media.m4a')
+  const dest = match?.[1]?.trim() ?? ''
+  return dest || join(workDir, 'media.m4a')
 }

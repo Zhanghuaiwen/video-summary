@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import type { PipelineStage, ProgressPayload, Project } from '@shared/types'
+import { toErrorMessage } from '@shared/errors'
 import type { Store } from '../store'
 import { fetchVideoTitle, downloadAudio } from './video'
 import { prepareAudioSegments } from './audio'
@@ -32,7 +33,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
   }
 
   const setStage = (stage: PipelineStage, progress: number, message?: string): void => {
-    store.updateProject(projectId, { stage, progress, error: undefined, updatedAt: new Date().toISOString() })
+    store.updateProject(projectId, { stage, progress, error: undefined })
     emit({ projectId, stage, progress, message })
   }
 
@@ -49,7 +50,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
     if (project.source === 'bilibili' && project.sourceUrl) {
       setStage('downloading', 1, '正在获取视频信息…')
       const title = await fetchVideoTitle(project.sourceUrl)
-      store.updateProject(projectId, { title, updatedAt: new Date().toISOString() })
+      store.updateProject(projectId, { title })
       setStage('downloading', 2, '正在下载音频…')
       mediaPath = await downloadAudio(project.sourceUrl, dir, (pct) => {
         setStage('downloading', pct, '正在下载音频…')
@@ -68,8 +69,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
 
     setStage('transcribing', 0, '正在转写语音…')
     const transcript = await transcribeBatch(segments, (done, total) => {
-      const pct = Math.round((done / total) * 100)
-      setStage('transcribing', pct, `正在转写 ${done}/${total} 段…`)
+      setStage('transcribing', Math.round((done / total) * 100), `正在转写 ${done}/${total} 段…`)
     })
     checkCancelled()
     if (!transcript.trim()) throw new Error('转写结果为空')
@@ -92,13 +92,12 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
       progress: 100,
       transcriptPath,
       summaryPath,
-      error: undefined,
-      updatedAt: new Date().toISOString()
+      error: undefined
     })
     emit({ projectId, stage: 'done', progress: 100, message: '完成' })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    store.updateProject(projectId, { stage: 'failed', error: message, updatedAt: new Date().toISOString() })
+    const message = toErrorMessage(err)
+    store.updateProject(projectId, { stage: 'failed', error: message })
     emit({ projectId, stage: 'failed', progress: 0, message })
   } finally {
     running.delete(projectId)

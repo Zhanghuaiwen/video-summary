@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
+import { toErrorMessage } from '@shared/errors'
 import type { SummaryDoc } from '@shared/types'
 
 type TabKey = 'summary' | 'transcript'
@@ -29,7 +30,7 @@ export default function DocPage(): React.JSX.Element {
         setSummary(s)
         setTranscript(t)
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) => setError(toErrorMessage(err)))
       .finally(() => setLoading(false))
   }, [selectedId, project?.stage]) // eslint-disable-line react-hooks/exhaustive-deps
 

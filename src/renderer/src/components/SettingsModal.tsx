@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
+import { DEFAULT_CONFIG } from '@shared/types'
+import { toErrorMessage } from '@shared/errors'
 
 export default function SettingsModal(): React.JSX.Element {
   const config = useAppStore((s) => s.config)
   const setConfig = useAppStore((s) => s.setConfig)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
 
-  const [apiKey, setApiKey] = useState(config?.apiKey ?? '')
-  const [asrModel, setAsrModel] = useState(config?.asrModel ?? 'FunAudioLLM/SenseVoiceSmall')
-  const [llmModel, setLlmModel] = useState(config?.llmModel ?? 'Qwen/Qwen2.5-7B-Instruct')
-  const [llmBaseUrl, setLlmBaseUrl] = useState(config?.llmBaseUrl ?? 'https://api.siliconflow.cn/v1')
+  const [apiKey, setApiKey] = useState(config?.apiKey ?? DEFAULT_CONFIG.apiKey)
+  const [asrModel, setAsrModel] = useState(config?.asrModel ?? DEFAULT_CONFIG.asrModel)
+  const [llmModel, setLlmModel] = useState(config?.llmModel ?? DEFAULT_CONFIG.llmModel)
+  const [llmBaseUrl, setLlmBaseUrl] = useState(config?.llmBaseUrl ?? DEFAULT_CONFIG.llmBaseUrl)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
@@ -22,7 +24,7 @@ export default function SettingsModal(): React.JSX.Element {
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err))
+      alert(toErrorMessage(err))
     } finally {
       setSaving(false)
     }

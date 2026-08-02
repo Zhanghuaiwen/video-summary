@@ -8,6 +8,8 @@ export async function fetchVideoTitle(url: string): Promise<string> {
   const res = await runCommand(ytDlpPath(), [
     '--skip-download',
     '--no-playlist',
+    '--encoding',
+    'utf-8',
     '--print',
     '%(title)s',
     url
@@ -23,6 +25,8 @@ export async function downloadAudio(url: string, workDir: string, onProgress: (p
       '-f',
       'bestaudio/best',
       '--no-playlist',
+      '--encoding',
+      'utf-8',
       '--newline',
       '--progress',
       '-o',

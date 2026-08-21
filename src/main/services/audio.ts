@@ -3,7 +3,9 @@ import { join } from 'path'
 import ffmpegPath from 'ffmpeg-static'
 import { runCommand } from './process'
 
-const SEGMENT_SECONDS = 600
+// 单段音频时长：300s（5 分钟）。过长的单次转写请求响应慢、易超时；
+// 更细的分段同时带来更细的时间轴粒度。
+export const SEGMENT_SECONDS = 300
 
 export async function extractAudio(input: string, outDir: string): Promise<string> {
   mkdirSync(outDir, { recursive: true })

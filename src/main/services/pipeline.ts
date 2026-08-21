@@ -1,29 +1,99 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { mkdirSync, writeFileSync } from 'fs'
-import type { PipelineStage, ProgressPayload, Project } from '@shared/types'
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs'
+import type { KeyFrameInfo, PipelineStage, ProgressPayload, Project, ProjectCheckpoint, SummaryDoc, TimelineSegment, VisionDoc } from '@shared/types'
+import { DEFAULT_ANALYSIS_CONFIG } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
 import type { Store } from '../store'
-import { fetchVideoTitle, downloadAudio } from './video'
-import { prepareAudioSegments } from './audio'
-import { transcribeBatch } from './transcriber'
+import { getConfig } from './config'
+import { fetchVideoTitle, downloadMedia, probeMediaDuration } from './video'
+import { prepareAudioSegments, SEGMENT_SECONDS } from './audio'
+import { transcribeBatch, type TranscriptBlock } from './transcriber'
 import { summarizeTranscript } from './summarizer'
+import { clearFramesDir, extractKeyFrames } from './frames'
+import { analyzeFrames, buildVisionBrief } from './vision'
+import { blocksToText, buildTimeline, buildTimedTranscript } from './timeline'
+import { generateMindMap, createMindMapDoc, clampMindMapTimes } from './mindmap'
+import { buildCacheKey, saveToCache, restoreFromCache, sha1File } from './cache'
+import { normalizeChapterPoints } from '@shared/summary-util'
 
 export type ProgressEmitter = (p: ProgressPayload) => void
 
-const running = new Map<string, { cancelled: boolean }>()
+interface RunningCtx {
+  cancelled: boolean
+  controller: AbortController
+}
+
+const running = new Map<string, RunningCtx>()
 
 export function cancelPipeline(projectId: string): void {
   const ctx = running.get(projectId)
-  if (ctx) ctx.cancelled = true
+  if (ctx) {
+    ctx.cancelled = true
+    ctx.controller.abort()
+  }
 }
 
 function workDir(projectId: string): string {
   return join(app.getPath('userData'), 'projects', projectId)
 }
 
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, 'utf-8')) as T
+}
+
+/** 读取转写断点数据（分段时间 + 文本），用于跳过转写直接续跑视觉/总结 */
+function readBlocks(dir: string): TranscriptBlock[] | undefined {
+  const p = join(dir, 'blocks.json')
+  if (!existsSync(p)) return undefined
+  try {
+    const d = JSON.parse(readFileSync(p, 'utf-8')) as { blocks?: TranscriptBlock[] }
+    return Array.isArray(d.blocks) ? d.blocks : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 缓存命中时修正文档内嵌的 projectId / createdAt */
+async function fixCachedDocs(projectId: string): Promise<void> {
+  const dir = workDir(projectId)
+  const now = new Date().toISOString()
+  const summaryPath = join(dir, 'summary.json')
+  if (existsSync(summaryPath)) {
+    const s = readJson<Record<string, unknown>>(summaryPath)
+    s['projectId'] = projectId
+    s['createdAt'] = now
+    writeFileSync(summaryPath, JSON.stringify(s, null, 2), 'utf-8')
+  }
+  const mindmapPath = join(dir, 'mindmap.json')
+  if (existsSync(mindmapPath)) {
+    const m = readJson<Record<string, unknown>>(mindmapPath)
+    m['projectId'] = projectId
+    m['createdAt'] = now
+    m['updatedAt'] = now
+    writeFileSync(mindmapPath, JSON.stringify(m, null, 2), 'utf-8')
+  }
+}
+
+export function buildSummaryDigest(summary: Pick<SummaryDoc, 'overview' | 'takeaways' | 'chapters'>): string {
+  const chapters = summary.chapters.map((c) => ({
+    title: c.title,
+    summary: c.summary.slice(0, 300),
+    points: normalizeChapterPoints(c.points).slice(0, 8).map((p) => ({
+      text: p.text.slice(0, 100),
+      subPoints: p.subPoints?.slice(0, 3).map((s) => s.slice(0, 60))
+    }))
+  }))
+  return JSON.stringify({ overview: summary.overview, takeaways: summary.takeaways ?? [], chapters }, null, 2)
+}
+
+/** 裁剪带时间的文字稿，控制思维导图生成时的 token 用量 */
+export function capTimedTranscript(segments: TimelineSegment[]): string {
+  return buildTimedTranscript(segments)
+}
+
 export async function startPipeline(projectId: string, store: Store, emit: ProgressEmitter): Promise<void> {
-  const ctx = { cancelled: false }
+  const ctx: RunningCtx = { cancelled: false, controller: new AbortController() }
   running.set(projectId, ctx)
 
   const getProject = (): Project => {
@@ -39,67 +109,376 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
 
   const dir = workDir(projectId)
   mkdirSync(dir, { recursive: true })
+
   const checkCancelled = (): void => {
-    if (ctx.cancelled) throw new Error('任务已取消')
+    if (ctx.cancelled) {
+      const err = new Error('任务已取消')
+      err.name = 'AbortError'
+      throw err
+    }
   }
 
   try {
     const project = getProject()
+    const analysis = { ...DEFAULT_ANALYSIS_CONFIG, ...(project.analysisConfig ?? {}) }
+    const { asrModel, llmModel, visionModel } = getConfig()
+    const customPrompt = analysis.customPrompt?.trim() || undefined
 
-    let mediaPath = ''
-    if (project.source === 'bilibili' && project.sourceUrl) {
-      setStage('downloading', 1, '正在获取视频信息…')
-      const title = await fetchVideoTitle(project.sourceUrl)
-      store.updateProject(projectId, { title })
-      setStage('downloading', 2, '正在下载音频…')
-      mediaPath = await downloadAudio(project.sourceUrl, dir, (pct) => {
-        setStage('downloading', pct, '正在下载音频…')
-      })
-    } else if (project.localPath) {
-      mediaPath = project.localPath
+    // ---- 断点续跑：各阶段产物与其所用模型已记录时跳过该阶段；产物缺失或模型变更则重做该阶段及后续 ----
+    let cp: ProjectCheckpoint = project.checkpoint ?? {}
+    const saveCheckpoint = (): void => {
+      store.updateProject(projectId, { checkpoint: cp })
+    }
+    const reuseTranscribe =
+      !!cp.transcribeDone &&
+      cp.asrModel === asrModel &&
+      existsSync(join(dir, 'blocks.json')) &&
+      existsSync(join(dir, 'transcript.txt'))
+    const reuseVision =
+      !!cp.visionDone && cp.visionModel === visionModel && reuseTranscribe && existsSync(join(dir, 'vision.json'))
+    const reuseSummary =
+      !!cp.summaryDone && cp.llmModel === llmModel && existsSync(join(dir, 'summary.json'))
+    const reuseMindmap =
+      !!cp.mindmapDone && cp.llmModel === llmModel && reuseSummary && reuseVision && existsSync(join(dir, 'mindmap.json'))
+
+    // ---- 1. 媒体（已下载/本地文件则跳过下载） ----
+    let mediaPath = project.mediaPath ?? ''
+    if (mediaPath && existsSync(mediaPath)) {
+      // 已有媒体文件，跳过下载
     } else {
-      throw new Error('项目缺少视频来源')
+      mediaPath = ''
+      if (project.source === 'bilibili' && project.sourceUrl) {
+        setStage('downloading', 1, '正在获取视频信息…')
+        const title = await fetchVideoTitle(project.sourceUrl)
+        store.updateProject(projectId, { title })
+        setStage('downloading', 2, '正在下载音视频…')
+        mediaPath = await downloadMedia(project.sourceUrl, dir, (pct) => {
+          setStage('downloading', Math.max(2, pct), '正在下载音视频…')
+        })
+        store.updateProject(projectId, { mediaPath })
+      } else if (project.localPath) {
+        mediaPath = project.localPath
+        store.updateProject(projectId, { mediaPath })
+      } else {
+        throw new Error('项目缺少视频来源')
+      }
     }
     checkCancelled()
 
-    setStage('extracting', 5, '正在提取音频并分段…')
-    const segments = await prepareAudioSegments(mediaPath, dir)
+    // ---- 2. 内容指纹 + 分析缓存 ----
+    setStage('extracting', 1, '正在计算内容指纹（用于分析缓存）…')
+    let mediaHash = project.mediaHash ?? ''
+    if (!mediaHash) {
+      mediaHash = await sha1File(mediaPath)
+      store.updateProject(projectId, { mediaHash })
+    }
+    // 真实媒体时长（秒）：用于钳制时间轴 endTime，避免短视频出现虚假的 10 分钟结尾
+    const mediaDuration = await probeMediaDuration(mediaPath).catch(() => undefined)
+    if (!mediaDuration) {
+      console.warn('[pipeline] 未能探测媒体时长，时间轴末端将不做钳制（请检查 ffmpeg 是否可用）')
+    }
+    const cacheKey = buildCacheKey({ mediaHash, asrModel, llmModel, visionModel, analysis })
+
+    if (restoreFromCache(cacheKey, dir)) {
+      await fixCachedDocs(projectId)
+      cp = { asrModel, llmModel, visionModel, transcribeDone: true, visionDone: true, summaryDone: true, mindmapDone: true }
+      saveCheckpoint()
+      const transcriptPath = join(dir, 'transcript.txt')
+      const summaryPath = join(dir, 'summary.json')
+      const visionPath = existsSync(join(dir, 'vision.json')) ? join(dir, 'vision.json') : undefined
+      const mindmapPath = existsSync(join(dir, 'mindmap.json')) ? join(dir, 'mindmap.json') : undefined
+      store.updateProject(projectId, {
+        stage: 'done',
+        progress: 100,
+        transcriptPath,
+        summaryPath,
+        visionPath,
+        mindmapPath,
+        error: undefined
+      })
+      emit({ projectId, stage: 'done', progress: 100, message: '命中缓存，已完成' })
+      return
+    }
+
+    // ---- 3. 转写（含音频分段；转写已完成则从断点数据恢复） ----
+    let blocks: TranscriptBlock[] | undefined
+    // 关键帧提取与转写并行：二者都只依赖媒体文件（提取耗时省在转写的网络等待里）
+    const signal = ctx.controller.signal
+    let framesPromise: Promise<KeyFrameInfo[] | null> = Promise.resolve(null)
+    if (analysis.enableVision && !reuseVision) {
+      framesPromise = clearFramesDir(dir)
+        .then(() =>
+          extractKeyFrames(mediaPath, dir, {
+            interval: analysis.keyFrameInterval,
+            sceneThreshold: analysis.sceneThreshold,
+            maxKeyFrames: analysis.maxKeyFrames
+          })
+        )
+        .catch((err) => {
+          console.warn('[pipeline] 关键帧提取失败，跳过视觉阶段', toErrorMessage(err))
+          return []
+        })
+    }
+    if (!reuseVision) {
+      if (reuseTranscribe) {
+        blocks = readBlocks(dir)
+        if (!blocks) throw new Error('转写断点数据缺失，请删除项目重新运行')
+        setStage('transcribing', 100, '转写已完成（断点续跑）')
+      } else {
+        setStage('extracting', 5, '正在提取音频并分段…')
+        const segments = await prepareAudioSegments(mediaPath, dir)
+        checkCancelled()
+        if (segments.length === 0) throw new Error('未能生成音频分段')
+        setStage('transcribing', 0, '正在转写语音…')
+        blocks = await transcribeBatch(segments, SEGMENT_SECONDS, (done, total) => {
+          setStage('transcribing', Math.round((done / total) * 100), `正在转写 ${done}/${total} 段…`)
+        })
+        checkCancelled()
+        const transcript = blocksToText(blocks)
+        if (!transcript.trim()) throw new Error('转写结果为空')
+        writeFileSync(join(dir, 'transcript.txt'), transcript, 'utf-8')
+        writeFileSync(join(dir, 'blocks.json'), JSON.stringify({ asrModel, blocks }, null, 2), 'utf-8')
+        cp = { ...cp, asrModel, transcribeDone: true }
+        saveCheckpoint()
+      }
+      store.updateProject(projectId, { transcriptPath: join(dir, 'transcript.txt') })
+    }
     checkCancelled()
-    if (segments.length === 0) throw new Error('未能生成音频分段')
 
-    setStage('transcribing', 0, '正在转写语音…')
-    const transcript = await transcribeBatch(segments, (done, total) => {
-      setStage('transcribing', Math.round((done / total) * 100), `正在转写 ${done}/${total} 段…`)
-    })
+    // ---- 4. 视觉分析（OCR + 画面描述）；与转写并行，先于总结（总结需要引用画面/OCR 信息） ----
+    const runVision = async (): Promise<{ visionDoc: VisionDoc; visionPath: string | undefined }> => {
+      if (reuseVision) {
+        const visionPath = join(dir, 'vision.json')
+        const visionDoc = readJson<VisionDoc>(visionPath)
+        // 修复旧版时间轴：用真实媒体时长重算 segments，避免「短视频结束时间 = 10:00」的虚假结尾
+        if (mediaDuration && mediaDuration > 0) {
+          const fixedSegments = buildTimeline(blocks!, visionDoc.frames ?? [], SEGMENT_SECONDS, mediaDuration)
+          if (fixedSegments.length > 0) {
+            visionDoc.segments = fixedSegments
+            writeFileSync(visionPath, JSON.stringify(visionDoc, null, 2), 'utf-8')
+          }
+        }
+        setStage('analyzing', 100, '视觉分析已完成（断点续跑）')
+        return { visionDoc, visionPath }
+      }
+      try {
+        setStage('analyzing', 1, '正在提取关键帧…')
+        const frames = await framesPromise
+        const visionDoc = await runVisionStage(mediaPath, dir, blocks!, analysis, visionModel, customPrompt, signal, setStage, mediaDuration, frames)
+        const visionPath = join(dir, 'vision.json')
+        writeFileSync(visionPath, JSON.stringify(visionDoc, null, 2), 'utf-8')
+        store.updateProject(projectId, { visionPath })
+        cp = { ...cp, visionModel, visionDone: true }
+        saveCheckpoint()
+        return { visionDoc, visionPath }
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err
+        console.warn('[pipeline] 视觉分析失败，已跳过', toErrorMessage(err))
+        return { visionDoc: { frames: [], segments: [], createdAt: new Date().toISOString() }, visionPath: undefined }
+      }
+    }
+
+    // ---- 5. 文字总结（顺次执行：需要视觉分析产出的画面/OCR 简报） ----
+    const runSummary = async (visionBrief?: string): Promise<{
+      summaryPath: string | undefined
+      summaryError: string | undefined
+      summary: SummaryDoc
+    }> => {
+      if (reuseSummary) {
+        const summaryPath = join(dir, 'summary.json')
+        const summary = readJson<SummaryDoc>(summaryPath)
+        store.updateProject(projectId, { summaryPath })
+        setStage('summarizing', 100, '总结已生成（断点续跑）')
+        return { summaryPath, summaryError: undefined, summary }
+      }
+      setStage('summarizing', 0, 'AI 正在生成总结…')
+      const transcriptPath = join(dir, 'transcript.txt')
+      if (!existsSync(transcriptPath)) throw new Error('缺少转写文字稿，无法生成总结')
+      const transcript = readFileSync(transcriptPath, 'utf-8')
+      let summary: SummaryDoc = {
+        projectId,
+        title: getProject().title,
+        overview: '',
+        takeaways: [],
+        chapters: [],
+        createdAt: new Date().toISOString()
+      }
+      let summaryPath: string | undefined
+      let summaryError: string | undefined
+      try {
+        const result = await summarizeTranscript(
+          transcript,
+          getProject().title,
+          (pct) => setStage('summarizing', pct, 'AI 正在生成总结…'),
+          { customPrompt, signal, model: llmModel },
+          visionBrief
+        )
+        checkCancelled()
+        summary = { ...result, projectId, createdAt: new Date().toISOString() }
+        summaryPath = join(dir, 'summary.json')
+        writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf-8')
+        store.updateProject(projectId, { summaryPath })
+        cp = { ...cp, llmModel, summaryDone: true }
+        saveCheckpoint()
+        setStage('summarizing', 100, '总结已生成')
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err
+        summaryError = toErrorMessage(err)
+        console.warn('[pipeline] 总结生成失败，已跳过（保留转写与视觉分析）', summaryError)
+        summary = {
+          projectId,
+          title: getProject().title,
+          overview: '总结生成失败，无法生成摘要。',
+          takeaways: [],
+          chapters: [],
+          createdAt: new Date().toISOString()
+        }
+        setStage('summarizing', 100, `总结生成失败：${summaryError}`)
+      }
+      return { summaryPath, summaryError, summary }
+    }
+
+    const visionRes = await runVision()
+    const visionDoc = visionRes.visionDoc
+    const visionPath = visionRes.visionPath
+    const visionBrief = visionDoc.frames.length > 0 ? buildVisionBrief(visionDoc.frames) : undefined
     checkCancelled()
-    if (!transcript.trim()) throw new Error('转写结果为空')
 
-    const transcriptPath = join(dir, 'transcript.txt')
-    writeFileSync(transcriptPath, transcript, 'utf-8')
-
-    setStage('summarizing', 0, 'AI 正在生成总结…')
-    const summary = await summarizeTranscript(transcript, getProject().title, (pct) => {
-      setStage('summarizing', pct, 'AI 正在生成总结…')
-    })
+    const summaryRes = await runSummary(visionBrief)
+    const summary = summaryRes.summary
+    const summaryPath = summaryRes.summaryPath
+    const summaryError = summaryRes.summaryError
     checkCancelled()
 
-    const summaryPath = join(dir, 'summary.json')
-    const doc = { ...summary, projectId, createdAt: new Date().toISOString() }
-    writeFileSync(summaryPath, JSON.stringify(doc, null, 2), 'utf-8')
+    // ---- 6. 思维导图生成（失败不阻塞整体完成） ----
+    let mindmapPath: string | undefined
+    if (summaryPath && visionDoc.segments.length > 0) {
+      if (reuseMindmap) {
+        mindmapPath = join(dir, 'mindmap.json')
+        store.updateProject(projectId, { mindmapPath })
+        setStage('mindmap', 100, '思维导图已生成（断点续跑）')
+      } else {
+        setStage('mindmap', 5, 'AI 正在生成思维导图…')
+        // 思维导图是单次大 LLM 请求，没有中间进度回调；用耗时驱动的进度条让用户看到任务仍在进行
+        const started = Date.now()
+        const ticker = setInterval(() => {
+          const elapsed = Math.round((Date.now() - started) / 1000)
+          const pct = Math.min(90, 5 + Math.round((elapsed / 180) * 85))
+          setStage('mindmap', pct, `正在生成思维导图… 已用时 ${elapsed} 秒（单次请求通常需 1~3 分钟）`)
+        }, 1000)
+        try {
+          const digest = buildSummaryDigest(summary)
+          const timed = capTimedTranscript(visionDoc.segments)
+          const root = await generateMindMap(
+            { title: summary.title, timedTranscript: timed, summaryDigest: digest, visionBrief },
+            { customPrompt, signal, model: llmModel }
+          )
+          clampMindMapTimes(root, mediaDuration ?? 0)
+          const mmDoc = createMindMapDoc(projectId, summary.title, root)
+          mindmapPath = join(dir, 'mindmap.json')
+          writeFileSync(mindmapPath, JSON.stringify(mmDoc, null, 2), 'utf-8')
+          store.updateProject(projectId, { mindmapPath })
+          cp = { ...cp, llmModel, mindmapDone: true }
+          saveCheckpoint()
+          setStage('mindmap', 100, '思维导图已生成')
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') throw err
+          console.warn('[pipeline] 思维导图生成失败，已跳过', toErrorMessage(err))
+          setStage('mindmap', 100, '思维导图生成失败（可在思维导图页重试）')
+        } finally {
+          clearInterval(ticker)
+        }
+      }
+    }
+    checkCancelled()
+
+    // ---- 7. 写缓存 + 完成 ----
+    try {
+      saveToCache(cacheKey, dir)
+    } catch (err) {
+      console.warn('[pipeline] 缓存写入失败', toErrorMessage(err))
+    }
 
     store.updateProject(projectId, {
-      stage: 'done',
+      stage: summaryPath ? 'done' : 'failed',
       progress: 100,
-      transcriptPath,
+      transcriptPath: join(dir, 'transcript.txt'),
       summaryPath,
-      error: undefined
+      visionPath,
+      mindmapPath,
+      error: summaryPath ? undefined : (summaryError ?? '总结生成失败：请在「设置」检查模型/网络后，点击「继续」从断点续跑')
     })
-    emit({ projectId, stage: 'done', progress: 100, message: '完成' })
+    emit({
+      projectId,
+      stage: summaryPath ? 'done' : 'failed',
+      progress: 100,
+      message: summaryPath ? '完成' : `总结失败：${summaryError ?? '请在「设置」检查模型/网络后，点击「继续」从断点续跑'}`
+    })
   } catch (err) {
-    const message = toErrorMessage(err)
+    const cancelled = ctx.cancelled || (err instanceof Error && err.name === 'AbortError')
+    const message = cancelled ? '任务已取消（已保存进度，可点击「继续」续跑）' : toErrorMessage(err)
     store.updateProject(projectId, { stage: 'failed', error: message })
     emit({ projectId, stage: 'failed', progress: 0, message })
   } finally {
     running.delete(projectId)
   }
+}
+
+async function runVisionStage(
+  mediaPath: string,
+  dir: string,
+  blocks: TranscriptBlock[],
+  analysis: { enableVision: boolean; keyFrameInterval: number; sceneThreshold: number; maxKeyFrames: number },
+  visionModel: string,
+  customPrompt: string | undefined,
+  signal: AbortSignal,
+  setStage: (stage: PipelineStage, progress: number, message?: string) => void,
+  mediaDuration?: number,
+  preFrames?: KeyFrameInfo[] | null
+): Promise<VisionDoc> {
+  let frames: KeyFrameInfo[] = []
+
+  if (analysis.enableVision) {
+    // preFrames 由转写阶段并行提取（避免重复解码）；为空则此处再提取
+    const extracted =
+      preFrames ??
+      (await clearFramesDir(dir)
+        .then(() =>
+          extractKeyFrames(mediaPath, dir, {
+            interval: analysis.keyFrameInterval,
+            sceneThreshold: analysis.sceneThreshold,
+            maxKeyFrames: analysis.maxKeyFrames
+          })
+        )
+        .catch((err) => {
+          console.warn('[pipeline] 关键帧提取失败，跳过视觉阶段', toErrorMessage(err))
+          return []
+        }))
+    setStage('analyzing', 10, `已提取 ${extracted.length} 个关键帧，正在视觉分析…`)
+
+    if (extracted.length > 0) {
+      const segments = buildTimeline(blocks, [], SEGMENT_SECONDS, mediaDuration)
+      const transcriptByTime = (t: number): string => {
+        const seg = segments.find((s) => t >= s.startTime && t < s.endTime)
+        return seg?.transcript ?? ''
+      }
+      const res = await analyzeFrames(dir, extracted, {
+        model: visionModel,
+        customPrompt,
+        signal,
+        transcriptByTime,
+        maxKeyFrames: analysis.maxKeyFrames,
+        onProgress: (done, total) =>
+          setStage('analyzing', 10 + Math.round((done / total) * 85), `正在视觉分析 ${done}/${total}…`)
+      }).catch((err) => {
+        if (err instanceof Error && err.name === 'AbortError') throw err
+        console.warn('[pipeline] 视觉分析失败，跳过', toErrorMessage(err))
+        return { frames: [], failedCount: extracted.length, usedModel: visionModel }
+      })
+      frames = res.frames
+    }
+  }
+
+  const timeline = buildTimeline(blocks, frames, SEGMENT_SECONDS, mediaDuration)
+  return { frames, segments: timeline, createdAt: new Date().toISOString() }
 }

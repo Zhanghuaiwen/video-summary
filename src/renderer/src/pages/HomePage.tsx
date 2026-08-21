@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
+import { DEFAULT_ANALYSIS_CONFIG } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
 
 type SourceMode = 'link' | 'file'
@@ -17,11 +18,22 @@ export default function HomePage(): React.JSX.Element {
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const [advOpen, setAdvOpen] = useState(false)
+  const [enableVision, setEnableVision] = useState(DEFAULT_ANALYSIS_CONFIG.enableVision)
+  const [keyFrameInterval, setKeyFrameInterval] = useState(String(DEFAULT_ANALYSIS_CONFIG.keyFrameInterval))
+  const [sceneThreshold, setSceneThreshold] = useState(String(DEFAULT_ANALYSIS_CONFIG.sceneThreshold))
+  const [maxKeyFrames, setMaxKeyFrames] = useState(String(DEFAULT_ANALYSIS_CONFIG.maxKeyFrames))
+  const [customPrompt, setCustomPrompt] = useState('')
+
   const config = useAppStore((s) => s.config)
+  const setConfig = useAppStore((s) => s.setConfig)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const setProjects = useAppStore((s) => s.setProjects)
   const setSelectedProject = useAppStore((s) => s.setSelectedProject)
   const setPage = useAppStore((s) => s.setPage)
+
+  const recentPrompts = config?.recentPrompts ?? []
 
   const pickFile = async (): Promise<void> => {
     const path = await client.pickVideo()
@@ -41,12 +53,24 @@ export default function HomePage(): React.JSX.Element {
 
     setBusy(true)
     try {
+      const prompt = customPrompt.trim()
       const project = await client.createProject({
         title: title.trim() || (mode === 'link' ? 'B站视频' : filePath.split(/[\\/]/).pop() ?? '本地视频'),
         source: mode === 'link' ? 'bilibili' : 'local',
         sourceUrl: mode === 'link' ? link.trim() : undefined,
-        localPath: mode === 'file' ? filePath.trim() : undefined
+        localPath: mode === 'file' ? filePath.trim() : undefined,
+        analysisConfig: {
+          enableVision,
+          keyFrameInterval: Math.max(5, Math.min(600, Number(keyFrameInterval) || DEFAULT_ANALYSIS_CONFIG.keyFrameInterval)),
+          sceneThreshold: Math.max(0.05, Math.min(0.9, Number(sceneThreshold) || DEFAULT_ANALYSIS_CONFIG.sceneThreshold)),
+          maxKeyFrames: Math.max(4, Math.min(200, Number(maxKeyFrames) || DEFAULT_ANALYSIS_CONFIG.maxKeyFrames)),
+          customPrompt: prompt || undefined
+        }
       })
+      if (prompt) {
+        const next = await client.saveRecentPrompt(prompt)
+        setConfig(next)
+      }
       await client.startProject(project.id)
       const projects = await client.listProjects()
       setProjects(projects)
@@ -60,25 +84,25 @@ export default function HomePage(): React.JSX.Element {
   }
 
   const inputCls =
-    'w-full rounded-xl border border-[#1c212b] bg-[#161a22] px-4 py-3 text-sm text-[#e6e8ee] placeholder:text-[#5b6472] focus:border-indigo-500/60 focus:outline-none'
+    'w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent-border-strong)] focus:outline-none'
 
   return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-8">
+    <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-8 py-10">
       {!config?.apiKey && (
         <button
           onClick={() => setSettingsOpen(true)}
-          className="mb-8 flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300 transition-colors hover:bg-amber-500/20"
+          className="mb-8 flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-[var(--status-amber)] transition-colors hover:bg-amber-500/20"
         >
           尚未配置 API Key，点击前往「设置」填写（转写与总结都需要）
         </button>
       )}
 
-      <h1 className="text-3xl font-semibold tracking-tight text-[#f1f3f7]">把视频，变成知识</h1>
-      <p className="mt-3 text-center text-sm text-[#8a93a5]">
-        粘贴链接或上传视频，AI 自动转写并生成摘要文档与思维导图
+      <h1 className="text-3xl font-semibold tracking-tight text-[var(--text-strong)]">把视频，变成知识</h1>
+      <p className="mt-3 text-center text-sm text-[var(--text-muted2)]">
+        粘贴链接或上传视频，AI 自动转写并生成摘要文档、思维导图与视觉分析
       </p>
 
-      <div className="mt-10 w-full rounded-2xl border border-[#1c212b] bg-[#12151b] p-6 shadow-xl shadow-black/20">
+      <div className="mt-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-xl shadow-[var(--shadow-color-soft)]">
         <div className="mb-5 flex gap-2">
           {SOURCE_MODES.map((m) => (
             <button
@@ -89,12 +113,12 @@ export default function HomePage(): React.JSX.Element {
               }}
               className={`flex-1 rounded-xl border px-4 py-3 text-left transition-colors ${
                 mode === m.key
-                  ? 'border-indigo-500/60 bg-indigo-500/10'
-                  : 'border-[#1c212b] bg-[#161a22] hover:border-[#2a2f3a]'
+                  ? 'border-[var(--accent-border-strong)] bg-[var(--accent-bg)]'
+                  : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
               }`}
             >
-              <div className="text-sm font-medium text-[#e6e8ee]">{m.title}</div>
-              <div className="mt-0.5 text-[11px] text-[#8a93a5]">{m.desc}</div>
+              <div className="text-sm font-medium text-[var(--text)]">{m.title}</div>
+              <div className="mt-0.5 text-[11px] text-[var(--text-muted2)]">{m.desc}</div>
             </button>
           ))}
         </div>
@@ -117,7 +141,7 @@ export default function HomePage(): React.JSX.Element {
             />
             <button
               onClick={() => void pickFile()}
-              className="shrink-0 rounded-xl border border-[#1c212b] bg-[#161a22] px-4 py-3 text-sm text-[#9aa3b2] transition-colors hover:border-[#2a2f3a] hover:text-[#e6e8ee]"
+              className="shrink-0 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)]"
             >
               选择文件
             </button>
@@ -131,12 +155,101 @@ export default function HomePage(): React.JSX.Element {
           className={`${inputCls} mt-3`}
         />
 
-        {error && <div className="mt-3 text-xs text-rose-400">{error}</div>}
+        {/* 高级分析选项 */}
+        <button
+          onClick={() => setAdvOpen((v) => !v)}
+          className="mt-3 flex items-center gap-1 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+        >
+          <span className={`inline-block transition-transform ${advOpen ? 'rotate-90' : ''}`}>▸</span>
+          高级分析选项
+        </button>
+
+        {advOpen && (
+          <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg-soft)] p-4">
+            <label className="flex cursor-pointer items-center justify-between text-xs text-[var(--text-muted)]">
+              <span>视觉分析（关键帧 + 画面 OCR + 视觉理解）</span>
+              <input
+                type="checkbox"
+                checked={enableVision}
+                onChange={(e) => setEnableVision(e.target.checked)}
+                className="h-4 w-4 accent-[var(--accent-solid)]"
+              />
+            </label>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">关键帧采样间隔（秒）</label>
+                <input
+                  value={keyFrameInterval}
+                  onChange={(e) => setKeyFrameInterval(e.target.value)}
+                  type="number"
+                  min={5}
+                  max={600}
+                  className={`${inputCls} px-3 py-2`}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">场景变化阈值（0.05~0.9）</label>
+                <input
+                  value={sceneThreshold}
+                  onChange={(e) => setSceneThreshold(e.target.value)}
+                  type="number"
+                  min={0.05}
+                  max={0.9}
+                  step={0.05}
+                  className={`${inputCls} px-3 py-2`}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">
+                  最多关键帧数（控制 OCR/画面分析数量，越少越快）
+                </label>
+                <input
+                  value={maxKeyFrames}
+                  onChange={(e) => setMaxKeyFrames(e.target.value)}
+                  type="number"
+                  min={4}
+                  max={200}
+                  className={`${inputCls} px-3 py-2`}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-[11px] text-[var(--text-faint)]">
+                自定义分析要求（可选，贯穿 视觉 / 总结 / 思维导图）
+              </label>
+              <textarea
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                rows={2}
+                placeholder="例如：这是面向初学者的教程，重点总结实现步骤与代码要点..."
+                className={`${inputCls} resize-none`}
+              />
+              {recentPrompts.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {recentPrompts.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setCustomPrompt(p)}
+                      className="max-w-56 truncate rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1 text-[11px] text-[var(--text-muted2)] transition-colors hover:border-[var(--accent-border)] hover:text-[var(--text-hover)]"
+                      title={p}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {error && <div className="mt-3 text-xs text-[var(--status-rose)]">{error}</div>}
 
         <button
           onClick={() => void submit()}
           disabled={busy}
-          className="mt-5 w-full rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 py-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-5 w-full rounded-xl py-3 text-sm font-medium text-white transition-opacity [background-image:var(--accent-gradient)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? '创建中…' : '开始解析'}
         </button>

@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
-import { DEFAULT_CONFIG } from '@shared/types'
+import { DEFAULT_CONFIG, type AccentColor } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
+import { applyAccent } from '@/App'
 
 export default function SettingsModal(): React.JSX.Element {
   const config = useAppStore((s) => s.config)
@@ -12,15 +13,25 @@ export default function SettingsModal(): React.JSX.Element {
   const [apiKey, setApiKey] = useState(config?.apiKey ?? DEFAULT_CONFIG.apiKey)
   const [asrModel, setAsrModel] = useState(config?.asrModel ?? DEFAULT_CONFIG.asrModel)
   const [llmModel, setLlmModel] = useState(config?.llmModel ?? DEFAULT_CONFIG.llmModel)
+  const [visionModel, setVisionModel] = useState(config?.visionModel ?? DEFAULT_CONFIG.visionModel)
   const [llmBaseUrl, setLlmBaseUrl] = useState(config?.llmBaseUrl ?? DEFAULT_CONFIG.llmBaseUrl)
+  const [accent, setAccent] = useState<AccentColor>(config?.accent ?? 'orange')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
-      const next = await client.setConfig({ apiKey: apiKey.trim(), asrModel: asrModel.trim(), llmModel: llmModel.trim(), llmBaseUrl: llmBaseUrl.trim() })
+      const next = await client.setConfig({
+        apiKey: apiKey.trim(),
+        asrModel: asrModel.trim(),
+        llmModel: llmModel.trim(),
+        visionModel: visionModel.trim(),
+        llmBaseUrl: llmBaseUrl.trim(),
+        accent
+      })
       setConfig(next)
+      applyAccent(next.accent)
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
     } catch (err) {
@@ -31,27 +42,27 @@ export default function SettingsModal(): React.JSX.Element {
   }
 
   const inputCls =
-    'w-full rounded-lg border border-[#1c212b] bg-[#161a22] px-3 py-2 text-sm text-[#e6e8ee] placeholder:text-[#5b6472] focus:border-indigo-500/60 focus:outline-none'
+    'w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent-border-strong)] focus:outline-none'
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--modal-overlay)]"
       onClick={() => setSettingsOpen(false)}
     >
       <div
-        className="w-[520px] rounded-2xl border border-[#1c212b] bg-[#12151b] p-6 shadow-2xl"
+        className="w-[520px] rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold text-[#f1f3f7]">设置</h3>
-          <button onClick={() => setSettingsOpen(false)} className="text-[#6b7280] hover:text-[#e6e8ee]">
+          <h3 className="text-base font-semibold text-[var(--text-strong)]">设置</h3>
+          <button onClick={() => setSettingsOpen(false)} className="text-[var(--text-dim)] hover:text-[var(--text)]">
             ✕
           </button>
         </div>
 
         <div className="mt-5 flex flex-col gap-4">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[#9aa3b2]">硅基流动 API Key</label>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">硅基流动 API Key</label>
             <input
               type="password"
               value={apiKey}
@@ -59,24 +70,57 @@ export default function SettingsModal(): React.JSX.Element {
               placeholder="sk-...（在 https://siliconflow.cn 注册获取）"
               className={inputCls}
             />
-            <p className="mt-1.5 text-[11px] leading-relaxed text-[#5b6472]">
+            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
               转写（SenseVoice）与总结（Qwen）共用此 Key，仅保存在本机，不会上传到任何第三方。
             </p>
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[#9aa3b2]">转写模型 (ASR)</label>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">转写模型 (ASR)</label>
             <input value={asrModel} onChange={(e) => setAsrModel(e.target.value)} className={inputCls} />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[#9aa3b2]">总结模型 (LLM)</label>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">总结模型 (LLM)</label>
             <input value={llmModel} onChange={(e) => setLlmModel(e.target.value)} className={inputCls} />
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-[#9aa3b2]">API Base URL</label>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">视觉理解模型 (VL)</label>
+            <input value={visionModel} onChange={(e) => setVisionModel(e.target.value)} className={inputCls} />
+            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-faint)]">
+              用于关键帧的画面描述与 OCR，需为多模态模型（如 Qwen/Qwen2.5-VL-7B-Instruct）。
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">API Base URL</label>
             <input value={llmBaseUrl} onChange={(e) => setLlmBaseUrl(e.target.value)} className={inputCls} />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">强调色</label>
+            <div className="flex gap-2">
+              {(
+                [
+                  { key: 'orange', label: '橙色', swatch: '#f97316' },
+                  { key: 'blue', label: '蓝色', swatch: '#3b82f6' }
+                ] as { key: AccentColor; label: string; swatch: string }[]
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setAccent(opt.key)}
+                  className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                    accent === opt.key
+                      ? 'border-[var(--accent-border-strong)] bg-[var(--accent-bg-soft)] text-[var(--text)]'
+                      : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  <span className="h-3 w-3 rounded-full" style={{ background: opt.swatch }} />
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -85,16 +129,16 @@ export default function SettingsModal(): React.JSX.Element {
             href="https://siliconflow.cn"
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-indigo-400 hover:text-indigo-300"
+            className="text-xs text-[var(--accent-text)] hover:opacity-80"
           >
             打开硅基流动官网 →
           </a>
           <div className="flex items-center gap-3">
-            {saved && <span className="text-xs text-emerald-400">已保存</span>}
+            {saved && <span className="text-xs text-[var(--status-emerald)]">已保存</span>}
             <button
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-opacity hover:bg-indigo-400 disabled:opacity-50"
+              className="rounded-lg bg-[var(--accent-solid)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:bg-[var(--accent-solid-hover)] disabled:opacity-50"
             >
               {saving ? '保存中…' : '保存'}
             </button>

@@ -5,6 +5,11 @@ export interface RunCallbacks {
   onStderr?: (line: string) => void
 }
 
+export interface RunOptions {
+  /** 非零退出码不视为失败，返回原始输出（用于 ffmpeg -i 探测等场景） */
+  allowNonZero?: boolean
+}
+
 export interface RunResult {
   code: number
   stdout: string
@@ -18,7 +23,7 @@ function emitLines(text: string, cb: ((line: string) => void) | undefined): void
   }
 }
 
-export function runCommand(cmd: string, args: string[], callbacks?: RunCallbacks): Promise<RunResult> {
+export function runCommand(cmd: string, args: string[], callbacks?: RunCallbacks, options?: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true })
     let stdout = ''
@@ -36,8 +41,8 @@ export function runCommand(cmd: string, args: string[], callbacks?: RunCallbacks
     })
     child.on('error', reject)
     child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ code, stdout, stderr })
+      if (code === 0 || options?.allowNonZero) {
+        resolve({ code: code ?? -1, stdout, stderr })
       } else {
         reject(new Error(`命令失败(${cmd}) code=${code}: ${stderr.trim().slice(0, 500)}`))
       }

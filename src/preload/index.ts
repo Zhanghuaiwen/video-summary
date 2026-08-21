@@ -2,10 +2,17 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   IpcChannels,
   type AppConfig,
+  type CreateProjectInput,
+  type DialogResult,
+  type ImportResult,
   type IpcResult,
+  type MindMapDoc,
+  type MindMapExportFormat,
   type ProgressPayload,
   type Project,
-  type SummaryDoc
+  type SaveMindMapInput,
+  type SummaryDoc,
+  type VisionDoc
 } from '@shared/types'
 
 const api = {
@@ -14,16 +21,14 @@ const api = {
   getConfig: (): Promise<IpcResult<AppConfig>> => ipcRenderer.invoke(IpcChannels.config.get),
   setConfig: (patch: Partial<AppConfig>): Promise<IpcResult<AppConfig>> =>
     ipcRenderer.invoke(IpcChannels.config.set, patch),
+  saveRecentPrompt: (prompt: string): Promise<IpcResult<AppConfig>> =>
+    ipcRenderer.invoke(IpcChannels.config.recentPrompt, prompt),
 
   pickVideo: (): Promise<IpcResult<string | null>> => ipcRenderer.invoke(IpcChannels.dialog.pickVideo),
 
   listProjects: (): Promise<IpcResult<Project[]>> => ipcRenderer.invoke(IpcChannels.project.list),
-  createProject: (input: {
-    title: string
-    source: Project['source']
-    sourceUrl?: string
-    localPath?: string
-  }): Promise<IpcResult<Project>> => ipcRenderer.invoke(IpcChannels.project.create, input),
+  createProject: (input: CreateProjectInput): Promise<IpcResult<Project>> =>
+    ipcRenderer.invoke(IpcChannels.project.create, input),
   deleteProject: (id: string): Promise<IpcResult<{ id: string }>> =>
     ipcRenderer.invoke(IpcChannels.project.delete, id),
   startProject: (id: string): Promise<IpcResult<{ id: string }>> =>
@@ -34,6 +39,24 @@ const api = {
     ipcRenderer.invoke(IpcChannels.project.getTranscript, id),
   getSummary: (id: string): Promise<IpcResult<SummaryDoc>> =>
     ipcRenderer.invoke(IpcChannels.project.getSummary, id),
+  getVision: (id: string): Promise<IpcResult<VisionDoc>> =>
+    ipcRenderer.invoke(IpcChannels.project.getVision, id),
+  openFolder: (id: string): Promise<IpcResult<{ path: string }>> =>
+    ipcRenderer.invoke(IpcChannels.project.openFolder, id),
+  playMedia: (id: string): Promise<IpcResult<{ path: string }>> =>
+    ipcRenderer.invoke(IpcChannels.project.playMedia, id),
+
+  mindmapGet: (id: string): Promise<IpcResult<MindMapDoc>> => ipcRenderer.invoke(IpcChannels.mindmap.get, id),
+  mindmapSave: (input: SaveMindMapInput): Promise<IpcResult<MindMapDoc>> =>
+    ipcRenderer.invoke(IpcChannels.mindmap.save, input),
+  mindmapExport: (input: { projectId: string; format: MindMapExportFormat }): Promise<IpcResult<DialogResult>> =>
+    ipcRenderer.invoke(IpcChannels.mindmap.export, input),
+  mindmapImport: (projectId: string): Promise<IpcResult<ImportResult>> =>
+    ipcRenderer.invoke(IpcChannels.mindmap.import, projectId),
+  mindmapRegenerate: (projectId: string): Promise<IpcResult<MindMapDoc>> =>
+    ipcRenderer.invoke(IpcChannels.mindmap.regenerate, projectId),
+  mindmapRecent: (): Promise<IpcResult<{ id: string; title: string; updatedAt: string }[]>> =>
+    ipcRenderer.invoke(IpcChannels.mindmap.recent),
 
   onProgress: (cb: (payload: ProgressPayload) => void): (() => void) => {
     const listener = (_e: unknown, payload: ProgressPayload): void => cb(payload)

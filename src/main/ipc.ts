@@ -1,15 +1,24 @@
-import { app, dialog, ipcMain, BrowserWindow } from 'electron'
-import { readFileSync } from 'fs'
-import { getConfig, setConfig } from './services/config'
+import { app, dialog, ipcMain, BrowserWindow, shell } from 'electron'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
+import { join } from 'path'
+import { getConfig, setConfig, saveRecentPrompt } from './services/config'
 import { startPipeline, cancelPipeline, type ProgressEmitter } from './services/pipeline'
+import { parseJson, parseOpml, parseFreeMind, parseXMindBytes, parseXMind8Xml, detectFormat, serializeJson, serializeOpml, serializeFreeMind, serializeXMind, serializeMarkdown, fromImported, EXPORT_EXTENSIONS } from './services/mindmap-formats'
 import type { Store } from './store'
 import { toErrorMessage } from '@shared/errors'
 import {
   IpcChannels,
   type AppConfig,
+  type CreateProjectInput,
+  type DialogResult,
   type IpcResult,
+  type ImportResult,
+  type MindMapDoc,
+  type MindMapExportFormat,
   type Project,
-  type SummaryDoc
+  type SaveMindMapInput,
+  type SummaryDoc,
+  type VisionDoc
 } from '@shared/types'
 
 const sendProgress: ProgressEmitter = (p) => {
@@ -22,12 +31,28 @@ const VIDEO_FILTERS = [
   { name: '视频/音频', extensions: ['mp4', 'mkv', 'webm', 'mov', 'avi', 'flv', 'm4v', 'mp3', 'm4a', 'wav', 'flac'] }
 ]
 
+const MINDMAP_OPEN_FILTERS = [
+  { name: '思维导图', extensions: ['xmind', 'mm', 'opml', 'json', 'xml'] },
+  { name: '所有文件', extensions: ['*'] }
+]
+
 async function handle<T>(fn: () => T | Promise<T>): Promise<IpcResult<T>> {
   try {
     return { ok: true, data: await fn() }
   } catch (err) {
     return { ok: false, error: toErrorMessage(err) }
   }
+}
+
+function projectWorkDir(projectId: string): string {
+  return join(app.getPath('userData'), 'projects', projectId)
+}
+
+function readMindMapDoc(project: Project): MindMapDoc {
+  if (!project?.mindmapPath || !existsSync(project.mindmapPath)) throw new Error('该项目尚无思维导图')
+  const doc = JSON.parse(readFileSync(project.mindmapPath, 'utf-8')) as MindMapDoc
+  if (!doc || !doc.root || typeof doc.root.title !== 'string') throw new Error('思维导图文件已损坏')
+  return doc
 }
 
 export function registerIpc(store: Store): void {
@@ -39,6 +64,10 @@ export function registerIpc(store: Store): void {
 
   ipcMain.handle(IpcChannels.config.set, (_e, patch: Partial<AppConfig>) =>
     handle(() => setConfig(patch))
+  )
+
+  ipcMain.handle(IpcChannels.config.recentPrompt, (_e, prompt: string) =>
+    handle(() => saveRecentPrompt(prompt))
   )
 
   ipcMain.handle(IpcChannels.dialog.pickVideo, () =>
@@ -57,7 +86,7 @@ export function registerIpc(store: Store): void {
 
   ipcMain.handle(
     IpcChannels.project.create,
-    (_e, input: { title: string; source: Project['source']; sourceUrl?: string; localPath?: string }) =>
+    (_e, input: CreateProjectInput) =>
       handle(() => store.createProject(input))
   )
 
@@ -98,4 +127,189 @@ export function registerIpc(store: Store): void {
       return JSON.parse(readFileSync(project.summaryPath, 'utf-8')) as SummaryDoc
     })
   )
+
+  ipcMain.handle(IpcChannels.project.getVision, (_e, id: string) =>
+    handle(() => {
+      const project = store.getProject(id)
+      if (!project?.visionPath) throw new Error('尚无视觉分析结果')
+      return JSON.parse(readFileSync(project.visionPath, 'utf-8')) as VisionDoc
+    })
+  )
+
+  ipcMain.handle(IpcChannels.project.openFolder, (_e, id: string) =>
+    handle(async () => {
+      const project = store.getProject(id)
+      if (!project) throw new Error('项目不存在')
+      const dir = projectWorkDir(id)
+      mkdirSync(dir, { recursive: true })
+      const err = await shell.openPath(dir)
+      if (err) throw new Error(err)
+      return { path: dir }
+    })
+  )
+
+  ipcMain.handle(IpcChannels.project.playMedia, (_e, id: string) =>
+    handle(async () => {
+      const project = store.getProject(id)
+      if (!project?.mediaPath || !existsSync(project.mediaPath)) throw new Error('该任务没有可播放的媒体文件')
+      const err = await shell.openPath(project.mediaPath)
+      if (err) throw new Error(err)
+      return { path: project.mediaPath }
+    })
+  )
+
+  // ---------- 思维导图 ----------
+
+  ipcMain.handle(IpcChannels.mindmap.get, (_e, id: string) =>
+    handle(() => readMindMapDoc(store.getProject(id)!))
+  )
+
+  ipcMain.handle(IpcChannels.mindmap.save, (_e, input: SaveMindMapInput) =>
+    handle(() => {
+      const project = store.getProject(input.projectId)
+      if (!project) throw new Error('项目不存在')
+      const doc = input.doc
+      if (!doc || !doc.root || typeof doc.root.title !== 'string') throw new Error('思维导图数据无效')
+      const dir = projectWorkDir(input.projectId)
+      mkdirSync(dir, { recursive: true })
+      const path = join(dir, 'mindmap.json')
+      doc.updatedAt = new Date().toISOString()
+      writeFileSync(path, JSON.stringify(doc, null, 2), 'utf-8')
+      store.updateProject(input.projectId, { mindmapPath: path })
+      return doc
+    })
+  )
+
+  ipcMain.handle(IpcChannels.mindmap.export, (_e, input: { projectId: string; format: MindMapExportFormat }) =>
+    handle(async (): Promise<DialogResult> => {
+      const project = store.getProject(input.projectId)
+      if (!project) throw new Error('项目不存在')
+      const doc = readMindMapDoc(project)
+      const ext = EXPORT_EXTENSIONS[input.format] ?? '.mindmap.json'
+      const safeName = (doc.title || project.title || 'mindmap').replace(/[\\/:*?"<>|]/g, '_')
+      const res = await dialog.showSaveDialog({
+        title: '导出思维导图',
+        defaultPath: join(app.getPath('downloads'), `${safeName}${ext}`),
+        filters: [{ name: '思维导图', extensions: [ext.replace(/^\./, '')] }]
+      })
+      if (res.canceled || !res.filePath) return { path: null, canceled: true }
+      const bytes = serializeForExport(input.format, doc)
+      writeFileSync(res.filePath, bytes)
+      return { path: res.filePath, canceled: false }
+    })
+  )
+
+  ipcMain.handle(IpcChannels.mindmap.import, (_e, projectId: string) =>
+    handle(async (): Promise<ImportResult> => {
+      const res = await dialog.showOpenDialog({
+        title: '导入思维导图',
+        properties: ['openFile'],
+        filters: MINDMAP_OPEN_FILTERS
+      })
+      if (res.canceled || res.filePaths.length === 0) throw new Error('已取消导入')
+      const file = res.filePaths[0]
+      const raw = readFileSync(file)
+      const format = detectFormat(new Uint8Array(raw))
+      let imported
+      if (format === 'xmind') {
+        imported = parseXMindBytes(new Uint8Array(raw))
+      } else {
+        const text = raw.toString('utf-8')
+        if (format === 'json') imported = parseJson(text)
+        else if (format === 'opml') imported = parseOpml(text)
+        else if (format === 'freemind') imported = parseFreeMind(text)
+        else if (format === 'xmind8') imported = parseXMind8Xml(text)
+        else throw new Error('无法识别的格式')
+      }
+      const root = fromImported(imported)
+      const now = new Date().toISOString()
+      const baseName = file.split(/[\\/]/).pop() ?? '导入'
+      const doc: MindMapDoc = {
+        id: crypto.randomUUID(),
+        projectId,
+        title: imported.title || baseName.replace(/\.[^.]+$/, ''),
+        root,
+        createdAt: now,
+        updatedAt: now
+      }
+      return { doc, format }
+    })
+  )
+
+  ipcMain.handle(IpcChannels.mindmap.regenerate, (_e, projectId: string) =>
+    handle(async (): Promise<MindMapDoc> => {
+      const project = store.getProject(projectId)
+      if (!project) throw new Error('项目不存在')
+      if (!project.transcriptPath || !project.summaryPath) throw new Error('尚无文字稿与总结，无法生成思维导图')
+      const summary = JSON.parse(readFileSync(project.summaryPath, 'utf-8')) as SummaryDoc
+      if (!project.visionPath || !existsSync(project.visionPath)) throw new Error('尚无时间轴数据，无法生成思维导图')
+      const vision = JSON.parse(readFileSync(project.visionPath, 'utf-8')) as VisionDoc
+const { generateMindMap, createMindMapDoc, clampMindMapTimes } = await import('./services/mindmap')
+      const { capTimedTranscript, buildSummaryDigest } = await import('./services/pipeline')
+      const { buildVisionBrief } = await import('./services/vision')
+      const { probeMediaDuration } = await import('./services/video')
+      const { buildTimeline } = await import('./services/timeline')
+      const { SEGMENT_SECONDS } = await import('./services/audio')
+      const { getConfig } = await import('./services/config')
+      // 用真实媒体时长修复旧版时间轴，避免把「0~10:00」的伪标签喂给导图模型
+      const mediaDuration = project.mediaPath ? await probeMediaDuration(project.mediaPath).catch(() => undefined) : undefined
+      if (mediaDuration && mediaDuration > 0 && vision.segments.length > 0) {
+        const blocks = vision.segments.map((s) => ({ text: s.transcript, startTime: s.startTime }))
+        const fixed = buildTimeline(blocks, vision.frames ?? [], SEGMENT_SECONDS, mediaDuration)
+        if (fixed.length > 0) {
+          vision.segments = fixed
+          // 写回修复后的时间轴，后续断点续跑/再次生成不再拿到未钳制的伪标签
+          try {
+            writeFileSync(project.visionPath, JSON.stringify(vision, null, 2), 'utf-8')
+          } catch {
+            // 写回失败不影响本次生成
+          }
+        }
+      }
+      const root = await generateMindMap(
+        {
+          title: summary.title,
+          timedTranscript: capTimedTranscript(vision.segments),
+          summaryDigest: buildSummaryDigest(summary),
+          visionBrief: vision.frames.length > 0 ? buildVisionBrief(vision.frames) : undefined
+        },
+        { customPrompt: project.analysisConfig?.customPrompt?.trim() || undefined, model: getConfig().llmModel }
+      )
+      clampMindMapTimes(root, mediaDuration ?? 0)
+      const doc = createMindMapDoc(projectId, summary.title, root)
+      const path = join(projectWorkDir(projectId), 'mindmap.json')
+      writeFileSync(path, JSON.stringify(doc, null, 2), 'utf-8')
+      store.updateProject(projectId, {
+        mindmapPath: path,
+        checkpoint: { ...(project.checkpoint ?? {}), llmModel: getConfig().llmModel, mindmapDone: true }
+      })
+      return doc
+    })
+  )
+
+  ipcMain.handle(IpcChannels.mindmap.recent, () =>
+    handle(() => {
+      return store
+        .listProjects()
+        .filter((p) => p.mindmapPath && existsSync(p.mindmapPath))
+        .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+        .slice(0, 8)
+        .map((p) => ({ id: p.id, title: p.title, updatedAt: p.updatedAt }))
+    })
+  )
+}
+
+function serializeForExport(format: MindMapExportFormat, doc: MindMapDoc): string | Uint8Array {
+  switch (format) {
+    case 'json':
+      return serializeJson(doc)
+    case 'opml':
+      return serializeOpml(doc)
+    case 'freemind':
+      return serializeFreeMind(doc)
+    case 'xmind':
+      return serializeXMind(doc)
+    case 'markdown':
+      return serializeMarkdown(doc)
+  }
 }

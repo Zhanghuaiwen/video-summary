@@ -1,18 +1,21 @@
 import { app } from 'electron'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { join } from 'path'
-import type { Project } from '@shared/types'
+import type { CreateProjectInput, Project } from '@shared/types'
 
 interface StoreData {
   projects: Project[]
 }
 
+export type ProjectPatch = Partial<Omit<Project, 'id' | 'createdAt'>>
+
 export interface Store {
   listProjects: () => Project[]
   getProject: (id: string) => Project | undefined
-  createProject: (input: { title: string; source: Project['source']; sourceUrl?: string; localPath?: string }) => Project
-  updateProject: (id: string, patch: Partial<Omit<Project, 'id' | 'createdAt'>>) => void
+  createProject: (input: CreateProjectInput) => Project
+  updateProject: (id: string, patch: ProjectPatch) => void
   deleteProject: (id: string) => void
+  projectWorkDir: (id: string) => string
 }
 
 export function createStore(): Store {
@@ -33,6 +36,8 @@ export function createStore(): Store {
     writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8')
   }
 
+  const projectWorkDir = (id: string): string => join(userDataDir, 'projects', id)
+
   return {
     listProjects: () => data.projects,
 
@@ -46,6 +51,7 @@ export function createStore(): Store {
         source: input.source,
         sourceUrl: input.sourceUrl ?? null,
         localPath: input.localPath ?? null,
+        analysisConfig: input.analysisConfig,
         stage: 'queued',
         progress: 0,
         createdAt: now,
@@ -59,6 +65,12 @@ export function createStore(): Store {
     deleteProject: (id) => {
       data.projects = data.projects.filter((p) => p.id !== id)
       persist()
+      // 清理工作目录，避免磁盘垃圾累积
+      try {
+        rmSync(projectWorkDir(id), { recursive: true, force: true })
+      } catch {
+        // 忽略清理失败
+      }
     },
 
     updateProject: (id, patch) => {
@@ -66,6 +78,8 @@ export function createStore(): Store {
       if (idx === -1) return
       data.projects[idx] = { ...data.projects[idx], ...patch, updatedAt: new Date().toISOString() }
       persist()
-    }
+    },
+
+    projectWorkDir
   }
 }

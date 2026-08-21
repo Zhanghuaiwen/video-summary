@@ -3,12 +3,23 @@ import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
 import { DEFAULT_ANALYSIS_CONFIG } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
+import { IconAlert, IconChevronDown, IconLink, IconVideo } from '@/components/icons'
 
 type SourceMode = 'link' | 'file'
 
-const SOURCE_MODES: { key: SourceMode; title: string; desc: string }[] = [
-  { key: 'link', title: 'B站链接', desc: '粘贴视频链接，自动下载并解析' },
-  { key: 'file', title: '本地文件', desc: '选择本地视频文件，直接解析' }
+const SOURCE_MODES: { key: SourceMode; title: string; desc: string; icon: React.JSX.Element }[] = [
+  {
+    key: 'link',
+    title: 'B站链接',
+    desc: '粘贴视频链接，自动下载并解析',
+    icon: <IconLink className="h-[18px] w-[18px] shrink-0" />
+  },
+  {
+    key: 'file',
+    title: '本地文件',
+    desc: '选择本地视频文件，直接解析',
+    icon: <IconVideo className="h-[18px] w-[18px] shrink-0" />
+  }
 ]
 
 export default function HomePage(): React.JSX.Element {
@@ -84,7 +95,7 @@ export default function HomePage(): React.JSX.Element {
   }
 
   const inputCls =
-    'w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent-border-strong)] focus:outline-none'
+    'w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text)] placeholder:text-[var(--text-faint)] transition-colors focus:border-[var(--accent-border-strong)] focus:bg-[var(--surface)] focus:outline-none'
 
   return (
     <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-8 py-10">
@@ -93,17 +104,20 @@ export default function HomePage(): React.JSX.Element {
           onClick={() => setSettingsOpen(true)}
           className="mb-8 flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-[var(--status-amber)] transition-colors hover:bg-amber-500/20"
         >
+          <IconAlert className="h-3.5 w-3.5" />
           尚未配置 API Key，点击前往「设置」填写（转写与总结都需要）
         </button>
       )}
 
-      <h1 className="text-3xl font-semibold tracking-tight text-[var(--text-strong)]">把视频，变成知识</h1>
-      <p className="mt-3 text-center text-sm text-[var(--text-muted2)]">
+      <h1 className="mt-2 text-center text-[32px] font-semibold leading-[1.25] tracking-tight text-balance text-[var(--text-strong)]">
+        把视频，变成<span className="text-[var(--accent-solid)]">知识</span>
+      </h1>
+      <p className="mt-3 whitespace-nowrap text-center text-sm leading-relaxed text-[var(--text-muted2)]">
         粘贴链接或上传视频，AI 自动转写并生成摘要文档、思维导图与视觉分析
       </p>
 
-      <div className="mt-10 w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-xl shadow-[var(--shadow-color-soft)]">
-        <div className="mb-5 flex gap-2">
+      <div className="card-raised mt-8 w-full rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6">
+        <div className="mb-5 grid grid-cols-2 gap-2">
           {SOURCE_MODES.map((m) => (
             <button
               key={m.key}
@@ -111,14 +125,19 @@ export default function HomePage(): React.JSX.Element {
                 setMode(m.key)
                 setError(null)
               }}
-              className={`flex-1 rounded-xl border px-4 py-3 text-left transition-colors ${
+              className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-left transition-all duration-150 ${
                 mode === m.key
-                  ? 'border-[var(--accent-border-strong)] bg-[var(--accent-bg)]'
+                  ? 'border-[var(--accent-border-strong)] bg-[var(--accent-bg)] shadow-[0_0_0_1px_var(--accent-border-strong)]'
                   : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
               }`}
             >
-              <div className="text-sm font-medium text-[var(--text)]">{m.title}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--text-muted2)]">{m.desc}</div>
+              <span className={mode === m.key ? 'text-[var(--accent-text)]' : 'text-[var(--text-dim)]'}>{m.icon}</span>
+              <span className="min-w-0">
+                <span className={`block text-sm font-medium ${mode === m.key ? 'text-[var(--text)]' : 'text-[var(--text-body)]'}`}>
+                  {m.title}
+                </span>
+                <span className="mt-0.5 block truncate text-[11px] text-[var(--text-muted2)]">{m.desc}</span>
+              </span>
             </button>
           ))}
         </div>
@@ -141,8 +160,9 @@ export default function HomePage(): React.JSX.Element {
             />
             <button
               onClick={() => void pickFile()}
-              className="shrink-0 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text)]"
+              className="flex shrink-0 items-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--accent-border)] hover:text-[var(--text)]"
             >
+              <IconVideo className="h-4 w-4 shrink-0 text-[var(--text-muted)]" />
               选择文件
             </button>
           </div>
@@ -158,9 +178,9 @@ export default function HomePage(): React.JSX.Element {
         {/* 高级分析选项 */}
         <button
           onClick={() => setAdvOpen((v) => !v)}
-          className="mt-3 flex items-center gap-1 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+          className="mt-4 flex items-center gap-1.5 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
         >
-          <span className={`inline-block transition-transform ${advOpen ? 'rotate-90' : ''}`}>▸</span>
+          <IconChevronDown className={`h-3.5 w-3.5 transition-transform duration-150 ${advOpen ? '' : '-rotate-90'}`} />
           高级分析选项
         </button>
 
@@ -176,9 +196,9 @@ export default function HomePage(): React.JSX.Element {
               />
             </label>
 
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">关键帧采样间隔（秒）</label>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">关键帧采样间隔（秒）</label>
                 <input
                   value={keyFrameInterval}
                   onChange={(e) => setKeyFrameInterval(e.target.value)}
@@ -189,7 +209,7 @@ export default function HomePage(): React.JSX.Element {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">场景变化阈值（0.05~0.9）</label>
+                <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">场景变化阈值（0.05~0.9）</label>
                 <input
                   value={sceneThreshold}
                   onChange={(e) => setSceneThreshold(e.target.value)}
@@ -201,7 +221,7 @@ export default function HomePage(): React.JSX.Element {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[11px] text-[var(--text-faint)]">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">
                   最多关键帧数（控制 OCR/画面分析数量，越少越快）
                 </label>
                 <input
@@ -216,7 +236,7 @@ export default function HomePage(): React.JSX.Element {
             </div>
 
             <div className="mt-3">
-              <label className="mb-1 block text-[11px] text-[var(--text-faint)]">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--text-muted)]">
                 自定义分析要求（可选，贯穿 视觉 / 总结 / 思维导图）
               </label>
               <textarea
@@ -244,12 +264,17 @@ export default function HomePage(): React.JSX.Element {
           </div>
         )}
 
-        {error && <div className="mt-3 text-xs text-[var(--status-rose)]">{error}</div>}
+        {error && (
+          <div className="mt-3 flex items-center gap-1.5 text-xs text-[var(--status-rose)]">
+            <IconAlert className="h-3.5 w-3.5 shrink-0" />
+            {error}
+          </div>
+        )}
 
         <button
           onClick={() => void submit()}
           disabled={busy}
-          className="mt-5 w-full rounded-xl py-3 text-sm font-medium text-white transition-opacity [background-image:var(--accent-gradient)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-5 w-full rounded-xl py-3 text-sm font-semibold tracking-wide text-white shadow-[0_10px_24px_-8px_var(--accent-glow)] transition-all duration-150 [background-image:var(--accent-gradient)] hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
         >
           {busy ? '创建中…' : '开始解析'}
         </button>

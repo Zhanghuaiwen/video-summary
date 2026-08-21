@@ -10,6 +10,19 @@ import NodeDetail from './mindmap/NodeDetail'
 import Player, { type PlayerHandle } from './mindmap/Player'
 import { layoutTreePositions } from './mindmap/layout'
 import { isAudioFile } from '@/utils/media'
+import {
+  IconChevronDown,
+  IconCollapseAll,
+  IconDownload,
+  IconExpandAll,
+  IconGitBranch,
+  IconHistory,
+  IconLayout,
+  IconMaximize,
+  IconRotate,
+  IconSave,
+  IconUpload
+} from '@/components/icons'
 
 const EXPORT_ITEMS: { format: MindMapExportFormat; label: string }[] = [
   { format: 'json', label: 'JSON（完整无损）' },
@@ -222,46 +235,54 @@ export default function MindMapPage(): React.JSX.Element {
       {/* 顶栏 */}
       <header className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-2.5">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-[var(--text-strong)]">{project.title}</div>
-          <div className="flex items-center gap-2 text-[11px] text-[var(--text-faint)]">
+          <div className="truncate text-sm font-semibold tracking-tight text-[var(--text-strong)]">{project.title}</div>
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${dirty ? 'bg-[var(--status-amber)]' : 'bg-[var(--status-emerald)]'}`} />
             <span className={dirty ? 'text-[var(--status-amber)]' : 'text-[var(--status-emerald)]'}>{saveStatusText}</span>
-            {saveState === 'saved' && <span>· {doc?.updatedAt ? new Date(doc.updatedAt).toLocaleTimeString('zh-CN', { hour12: false }) : clockNow()}</span>}
+            {saveState === 'saved' && (
+              <span className="tabular-nums text-[var(--text-faint)]">· {doc?.updatedAt ? new Date(doc.updatedAt).toLocaleTimeString('zh-CN', { hour12: false }) : clockNow()}</span>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-0.5">
           <button
             onClick={doLayout}
             disabled={!hasMindmap}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] disabled:opacity-40"
+            title="重新布局"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:opacity-40"
           >
-            重新布局
+            <IconLayout className="h-3.5 w-3.5" />
+            布局
           </button>
           <button
             onClick={() => useMindMapStore.getState().setAllCollapsed(true)}
             disabled={!hasMindmap}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] disabled:opacity-40"
+            title="全部收起"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:opacity-40"
           >
-            全部收起
+            <IconCollapseAll className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => useMindMapStore.getState().setAllCollapsed(false)}
             disabled={!hasMindmap}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] disabled:opacity-40"
+            title="全部展开"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:opacity-40"
           >
-            全部展开
+            <IconExpandAll className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => void (document.fullscreenElement ? document.exitFullscreen() : containerRef.current?.requestFullscreen?.())}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+            title="全屏"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
           >
-            全屏
+            <IconMaximize className="h-3.5 w-3.5" />
           </button>
         </div>
 
-        <div className="mx-1 h-6 w-px bg-[var(--border)]" />
+        <div className="mx-0.5 h-6 w-px bg-[var(--border)]" />
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-0.5">
           <button
             onClick={() => {
               if (!hasMindmap || window.confirm('重新生成会用最新总结/画面信息重建整张导图，当前手工修改会被覆盖，确定继续？')) {
@@ -269,12 +290,19 @@ export default function MindMapPage(): React.JSX.Element {
               }
             }}
             disabled={regenBusy}
-            className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] disabled:opacity-40"
+            title="重新生成思维导图"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:opacity-40"
           >
-            {regenBusy ? '重新生成中…' : '重新生成'}
+            <IconRotate className={`h-3.5 w-3.5 ${regenBusy ? 'animate-spin' : ''}`} />
+            {regenBusy ? '生成中…' : '重新生成'}
           </button>
 
-          <button onClick={doImport} className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]">
+          <button
+            onClick={doImport}
+            title="导入思维导图文件"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          >
+            <IconUpload className="h-3.5 w-3.5" />
             导入
           </button>
 
@@ -282,17 +310,20 @@ export default function MindMapPage(): React.JSX.Element {
             <button
               onClick={() => setExportOpen((o) => !o)}
               disabled={!hasMindmap}
-              className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)] disabled:opacity-40"
+              title="导出思维导图"
+              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)] disabled:opacity-40"
             >
-              导出 ▾
+              <IconDownload className="h-3.5 w-3.5" />
+              导出
+              <IconChevronDown className={`h-3 w-3 transition-transform duration-150 ${exportOpen ? 'rotate-180' : ''}`} />
             </button>
             {exportOpen && (
-              <div className="absolute right-0 top-8 z-20 w-48 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)] py-1 shadow-2xl shadow-[var(--shadow-color)]">
+              <div className="card-raised absolute right-0 top-9 z-20 w-48 overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--surface-2)] py-1">
                 {EXPORT_ITEMS.map((item) => (
                   <button
                     key={item.format}
                     onClick={() => void doExport(item.format)}
-                    className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    className="block w-full px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-bg)] hover:text-[var(--accent-text)]"
                   >
                     {item.label}
                   </button>
@@ -304,18 +335,23 @@ export default function MindMapPage(): React.JSX.Element {
           <div className="relative">
             <button
               onClick={() => void loadRecent()}
-              className="rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+              title="最近打开的思维导图"
+              className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
             >
-              最近 ▾
+              <IconHistory className="h-3.5 w-3.5" />
+              最近
+              <IconChevronDown className={`h-3 w-3 transition-transform duration-150 ${recentOpen ? 'rotate-180' : ''}`} />
             </button>
             {recentOpen && (
-              <div className="absolute right-0 top-8 z-20 w-52 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)] py-1 shadow-2xl shadow-[var(--shadow-color)]">
-                {recentList.length === 0 && <div className="px-3 py-2 text-[11px] text-[var(--text-faint)]">暂无最近打开的思维导图</div>}
+              <div className="card-raised absolute right-0 top-9 z-20 w-52 overflow-hidden rounded-xl border border-[var(--border-strong)] bg-[var(--surface-2)] py-1">
+                {recentList.length === 0 && (
+                  <div className="px-3 py-2 text-[11px] text-[var(--text-faint)]">暂无最近打开的思维导图</div>
+                )}
                 {recentList.map((r) => (
                   <button
                     key={r.id}
                     onClick={() => openRecent(r.id)}
-                    className="flex w-full truncate px-3 py-2 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    className="block w-full truncate px-3 py-2 text-left text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--accent-bg)] hover:text-[var(--accent-text)]"
                   >
                     {r.title}
                   </button>
@@ -327,8 +363,9 @@ export default function MindMapPage(): React.JSX.Element {
           <button
             onClick={() => void saveNow()}
             disabled={!hasMindmap || !dirty}
-            className="ml-1 rounded-lg bg-[var(--accent-solid)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:bg-[var(--accent-solid-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="ml-1 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-[0_6px_16px_-6px_var(--accent-glow)] transition-all duration-150 [background-image:var(--accent-gradient)] hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
           >
+            <IconSave className="h-3.5 w-3.5" />
             保存
           </button>
         </div>
@@ -364,7 +401,10 @@ export default function MindMapPage(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-[var(--text-faint)]">
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-[var(--text-faint)]">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)]">
+            <IconGitBranch className="h-6 w-6" />
+          </div>
           {loadError && (
             <div className="max-w-md text-center text-xs leading-relaxed text-[var(--text-muted2)]">
               {loadError === '该项目尚无思维导图'
@@ -376,8 +416,9 @@ export default function MindMapPage(): React.JSX.Element {
           <button
             onClick={() => void doRegenerate()}
             disabled={regenBusy}
-            className="rounded-lg bg-[var(--accent-solid)] px-4 py-2 text-xs font-medium text-white transition-opacity hover:bg-[var(--accent-solid-hover)] disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold text-white shadow-[0_8px_20px_-8px_var(--accent-glow)] transition-all duration-150 [background-image:var(--accent-gradient)] hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
           >
+            <IconRotate className={`h-3.5 w-3.5 ${regenBusy ? 'animate-spin' : ''}`} />
             {regenBusy ? '生成中…' : '生成 / 重新生成思维导图'}
           </button>
         </div>
@@ -385,7 +426,7 @@ export default function MindMapPage(): React.JSX.Element {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed left-1/2 top-4 z-50 max-w-md -translate-x-1/2 truncate rounded-lg border border-[var(--border-strong)] bg-[var(--toast-bg)] px-4 py-2 text-xs text-[var(--text-body)] shadow-xl shadow-[var(--shadow-color)]">
+        <div className="card-raised fixed left-1/2 top-4 z-50 max-w-md -translate-x-1/2 truncate rounded-xl border border-[var(--border-strong)] bg-[var(--toast-bg)] px-4 py-2.5 text-xs text-[var(--text-body)]">
           {toast}
         </div>
       )}

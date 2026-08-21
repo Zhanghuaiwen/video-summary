@@ -1,4 +1,5 @@
 import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { IconFilm } from '@/components/icons'
 
 export interface PlayerHandle {
   seekTo: (t: number) => void
@@ -53,7 +54,7 @@ const Player = forwardRef<PlayerHandle, Props>(function Player({ src, kind, titl
   if (!src) {
     return (
       <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[11px] text-[var(--text-faint)]">
-        <span className="shrink-0">🎬</span>
+        <IconFilm className="h-4 w-4 shrink-0" />
         <span className="truncate">该项目没有可播放的媒体文件</span>
       </div>
     )

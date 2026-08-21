@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/appStore'
 import { DEFAULT_CONFIG, type AccentColor } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
 import { applyAccent } from '@/App'
+import { IconCheck, IconX } from '@/components/icons'
 
 export default function SettingsModal(): React.JSX.Element {
   const config = useAppStore((s) => s.config)
@@ -50,13 +51,17 @@ export default function SettingsModal(): React.JSX.Element {
       onClick={() => setSettingsOpen(false)}
     >
       <div
-        className="w-[520px] rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-2xl"
+        className="card-raised w-[520px] rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold text-[var(--text-strong)]">设置</h3>
-          <button onClick={() => setSettingsOpen(false)} className="text-[var(--text-dim)] hover:text-[var(--text)]">
-            ✕
+          <h3 className="text-base font-semibold tracking-tight text-[var(--text-strong)]">设置</h3>
+          <button
+            onClick={() => setSettingsOpen(false)}
+            title="关闭设置"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+          >
+            <IconX className="h-4 w-4" />
           </button>
         </div>
 
@@ -110,14 +115,16 @@ export default function SettingsModal(): React.JSX.Element {
                 <button
                   key={opt.key}
                   onClick={() => setAccent(opt.key)}
+                  aria-pressed={accent === opt.key}
                   className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
                     accent === opt.key
                       ? 'border-[var(--accent-border-strong)] bg-[var(--accent-bg-soft)] text-[var(--text)]'
                       : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)]'
                   }`}
                 >
-                  <span className="h-3 w-3 rounded-full" style={{ background: opt.swatch }} />
+                  <span className="h-3 w-3 shrink-0 rounded-full ring-1 ring-inset ring-black/20" style={{ background: opt.swatch }} />
                   {opt.label}
+                  {accent === opt.key && <IconCheck className="ml-auto h-3.5 w-3.5 text-[var(--accent-text)]" />}
                 </button>
               ))}
             </div>
@@ -138,7 +145,7 @@ export default function SettingsModal(): React.JSX.Element {
             <button
               onClick={() => void save()}
               disabled={saving}
-              className="rounded-lg bg-[var(--accent-solid)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:bg-[var(--accent-solid-hover)] disabled:opacity-50"
+              className="rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-[0_6px_16px_-6px_var(--accent-glow)] transition-all duration-150 [background-image:var(--accent-gradient)] hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
             >
               {saving ? '保存中…' : '保存'}
             </button>

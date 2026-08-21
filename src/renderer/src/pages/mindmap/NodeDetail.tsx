@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+﻿import { useMemo, useState } from 'react'
 import type { MindMapNode, TimelineSegment } from '@shared/types'
 import { walk } from '@shared/mindmap-util'
 import { fmtTime } from '@/utils/media'
+import { IconPlay } from '@/components/icons'
 
 interface Props {
   node: MindMapNode | null
@@ -118,7 +119,7 @@ export default function NodeDetail({
       </div>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] text-[var(--text-muted2)]">标题</span>
+        <span className="text-xs font-medium text-[var(--text-muted)]">标题</span>
         <input
           value={node.title}
           onChange={(e) => onUpdate(node.id, { title: e.target.value })}
@@ -127,7 +128,7 @@ export default function NodeDetail({
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] text-[var(--text-muted2)]">关键词（逗号分隔）</span>
+        <span className="text-xs font-medium text-[var(--text-muted)]">关键词（逗号分隔）</span>
         <input
           value={kn}
           onChange={(e) =>
@@ -144,7 +145,7 @@ export default function NodeDetail({
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] text-[var(--text-muted2)]">一句话摘要</span>
+        <span className="text-xs font-medium text-[var(--text-muted)]">一句话摘要</span>
         <textarea
           value={node.summary ?? ''}
           onChange={(e) => onUpdate(node.id, { summary: e.target.value })}
@@ -155,7 +156,7 @@ export default function NodeDetail({
       </label>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] text-[var(--text-muted2)]">详细内容</span>
+        <span className="text-xs font-medium text-[var(--text-muted)]">详细内容</span>
         <textarea
           value={node.content ?? ''}
           onChange={(e) => onUpdate(node.id, { content: e.target.value })}
@@ -168,7 +169,7 @@ export default function NodeDetail({
       {node.timeRange ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-[var(--text-muted2)]">视频时间</span>
+            <span className="text-xs font-medium text-[var(--text-muted)]">视频时间</span>
             <span className="text-xs tabular-nums text-[var(--text-secondary)]">
               {fmtTime(node.timeRange.start)} – {fmtTime(node.timeRange.end)}
             </span>
@@ -179,9 +180,10 @@ export default function NodeDetail({
           {canJump && (
             <button
               onClick={() => onSeek(node.timeRange!.start)}
-              className="mt-2 w-full rounded-md bg-[var(--accent-bg)] py-1.5 text-xs text-[var(--accent-text)] transition-colors hover:bg-[var(--accent-bg-hover)]"
+              className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--accent-bg)] py-1.5 text-xs font-medium text-[var(--accent-text)] transition-colors hover:bg-[var(--accent-bg-hover)]"
             >
-              ▶ 跳转到此处
+              <IconPlay className="h-3 w-3" />
+              跳转到此处
             </button>
           )}
         </div>

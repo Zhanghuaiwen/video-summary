@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import type { MindMapNode as MNode } from '@shared/types'
 import { fmtTime } from '@/utils/media'
+import { IconMinus, IconPlus } from '@/components/icons'
 
 export interface MindMapFlowData extends Record<string, unknown> {
   node: MNode
@@ -73,9 +74,9 @@ export const MindMapFlowNode = memo(function MindMapFlowNode({
             onToggleCollapse(id)
           }}
           title={collapsed ? '展开' : '收起'}
-          className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-strong)] bg-[var(--surface-hover)] text-[11px] leading-none text-[var(--text-muted)] hover:text-[var(--text)]"
+          className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-[var(--border-strong)] bg-[var(--surface-hover)] text-[var(--text-muted)] shadow-sm transition-colors hover:text-[var(--text)]"
         >
-          {collapsed ? '+' : '−'}
+          {collapsed ? <IconPlus className="h-3 w-3" /> : <IconMinus className="h-3 w-3" />}
         </button>
       )}
       <Handle type="target" position={Position.Left} className="!opacity-0" />

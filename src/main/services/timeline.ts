@@ -21,8 +21,10 @@ export function blocksToText(blocks: TranscriptBlock[]): string {
 
 /**
  * 把 ASR 分段与关键帧对齐到时间轴：Transcript + Frames 不再是两个独立数据。
- * mediaDuration 存在时，每个分段的 endTime 会被钳制到实际媒体时长（避免短视频出现
- * 「start+10min」的虚假结尾，例如 40s 视频结束时间被算成 10:00）。
+ * endTime 优先取「下一段的起点」——段的边界时间才是精确已知的，
+ * 这样即使混用不同粒度的分段（旧断点 300s / 新分段 60s）也不会出现空洞或覆盖；
+ * 最后一段用 segmentSeconds 兜底。mediaDuration 存在时整体钳制到实际媒体时长
+ * （避免短视频出现「start+10min」的虚假结尾，例如 40s 视频结束时间被算成 10:00）。
  */
 export function buildTimeline(
   blocks: TranscriptBlock[],
@@ -30,12 +32,15 @@ export function buildTimeline(
   segmentSeconds: number,
   mediaDuration?: number
 ): TimelineSegment[] {
-  return blocks.map((b) => {
-    const startTime = b.startTime
-    let endTime = b.startTime + segmentSeconds
+  return blocks.map((b, i) => {
+    const startTime = Math.max(0, b.startTime)
+    const next = blocks[i + 1]
+    let endTime =
+      next && next.startTime > startTime ? next.startTime : startTime + segmentSeconds
     if (mediaDuration !== undefined && mediaDuration > 0) {
       endTime = Math.min(endTime, mediaDuration)
     }
+    if (endTime <= startTime) endTime = startTime + Math.min(segmentSeconds, 1)
     const frameTimes = frames.filter((f) => f.time >= startTime && f.time < endTime).map((f) => f.time)
     return { startTime, endTime, transcript: b.text, frameTimes }
   })
@@ -135,16 +140,30 @@ export function refineSegments(segments: TimelineSegment[], blockChars = 240): T
 /**
  * 生成供 LLM 使用的带时间文字稿：先细化为句子级小块再控制总长度。
  * 相比旧的「按大段截断」，模型能看到覆盖全片的时间标签，节点时间不再塌缩到片尾。
+ *
+ * 超出 maxTotalChars 时做【全片均匀抽样】而不是从头部截断：
+ * 头部截断会让长视频后半段完全没有时间标签，LLM 只能把后半段内容的时间
+ * 瞎猜到已有标签的范围内；均匀抽稀保证首尾与中间各时段都有精确锚点。
  */
 export function buildTimedTranscript(segments: TimelineSegment[], maxTotalChars = 16000, blockChars = 240): string {
   const refined = refineSegments(segments, blockChars)
-  const lines: string[] = []
-  let used = 0
-  for (const s of refined) {
-    const line = `[${fmtTime(s.startTime)} - ${fmtTime(s.endTime)}]\n${s.transcript}`
-    if (lines.length > 0 && used + line.length > maxTotalChars) break
-    lines.push(line)
-    used += line.length
+  const entries = refined.map((s) => ({
+    seg: s,
+    line: `[${fmtTime(s.startTime)} - ${fmtTime(s.endTime)}]\n${s.transcript}`
+  }))
+  if (entries.length === 0) return ''
+
+  const totalChars = entries.reduce((n, e) => n + e.line.length + 2, 0)
+  let kept = entries
+  if (totalChars > maxTotalChars && entries.length > 2) {
+    const avgLen = totalChars / entries.length
+    const keepCount = Math.max(2, Math.floor((maxTotalChars / (avgLen + 2)) * 0.95))
+    // 等距抽稀：保留首尾块，中间按比例取样，时间顺序不变
+    const picked = new Set<number>()
+    for (let i = 0; i < keepCount; i++) {
+      picked.add(Math.min(entries.length - 1, Math.round((i * (entries.length - 1)) / Math.max(1, keepCount - 1))))
+    }
+    kept = entries.filter((_, i) => picked.has(i))
   }
-  return lines.join('\n\n')
+  return kept.map((e) => e.line).join('\n\n')
 }

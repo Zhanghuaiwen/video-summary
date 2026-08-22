@@ -61,8 +61,9 @@ export async function transcribeBatch(
   segmentSeconds: number,
   onProgress: (done: number, total: number) => void
 ): Promise<TranscriptBlock[]> {
-  // 并发转写提速（2 路），避免长视频串行过慢
-  const parts = await parallelMap(files, 2, async (file, i) => {
+  // 并发转写提速（3 路）：60s 细分段的请求数是旧 300s 分段的 5 倍，
+  // 靠并发把总耗时压回与旧方案接近的水平
+  const parts = await parallelMap(files, 3, async (file, i) => {
     const text = await transcribeFile(file)
     return { text, startTime: i * segmentSeconds } satisfies TranscriptBlock
   })

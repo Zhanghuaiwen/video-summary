@@ -3,9 +3,10 @@ import { join } from 'path'
 import ffmpegPath from 'ffmpeg-static'
 import { runCommand } from './process'
 
-// 单段音频时长：300s（5 分钟）。过长的单次转写请求响应慢、易超时；
-// 更细的分段同时带来更细的时间轴粒度。
-export const SEGMENT_SECONDS = 300
+// 单段音频时长：60s。每段的起点时间是 ASR 唯一精确已知的时间锚点，
+// 分段越细，时间轴的天然精度越高（句子级插值只需在 60s 内微调，
+// 而不是在 5 分钟大段里线性估算）。配合转写并发（3 路）控制总耗时。
+export const SEGMENT_SECONDS = 60
 
 export async function extractAudio(input: string, outDir: string): Promise<string> {
   mkdirSync(outDir, { recursive: true })

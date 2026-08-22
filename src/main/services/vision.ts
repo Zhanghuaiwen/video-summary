@@ -1,14 +1,17 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { chatJson, type ChatMessage, type MessageContent } from './llm'
+import { parallelMap } from './concurrency'
 import type { KeyFrameInfo } from '@shared/types'
 import { fmtTime } from './timeline'
 
 const BATCH_SIZE = 4
+/** 同时发给视觉模型的批次数（3 路 × 每批 4 帧 = 12 帧并行分析） */
+const BATCH_CONCURRENCY = 3
 // 视觉模型单次/全任务的安全上限（用户配置的 maxKeyFrames 不得突破此值）
 const MAX_FRAMES = 240
-// 进入总结/思维导图提示词的帧清单上限
-const BRIEF_FRAMES = 40
+// 进入总结/思维导图提示词的帧清单上限（适度放宽让总结有更多可用画面）
+const BRIEF_FRAMES = 48
 
 export interface VisionAnalysis {
   frames: KeyFrameInfo[]
@@ -141,26 +144,34 @@ export async function analyzeFrames(
     })
   const max = Math.max(4, Math.min(MAX_FRAMES, opts.maxKeyFrames ?? 30))
   const targets = frames.slice(0, max)
-  const results: KeyFrameInfo[] = []
-  let failedCount = 0
 
+  // 按固定批次切分后并发执行：单批失败只损失该批，不影响其余；
+  // parallelMap 保持结果与帧顺序一致，进度按「已完成批次数」回报
+  const batches: FrameTarget[][] = []
   for (let i = 0; i < targets.length; i += BATCH_SIZE) {
-    const batch = targets.slice(i, i + BATCH_SIZE)
+    batches.push(targets.slice(i, i + BATCH_SIZE))
+  }
+  let doneBatches = 0
+  const grouped = await parallelMap(batches, BATCH_CONCURRENCY, async (batch) => {
     try {
-      const r = await analyzeBatch(workDir, batch, {
+      return await analyzeBatch(workDir, batch, {
         model: opts.model,
         customPrompt: opts.customPrompt,
         signal: opts.signal,
         transcriptByTime
       })
-      results.push(...r)
     } catch (err) {
-      // 单批失败降级，不阻塞其它阶段
-      failedCount += batch.length
+      if (err instanceof Error && err.name === 'AbortError') throw err
       console.warn('[vision] 批次失败', err instanceof Error ? err.message : err)
+      return []
+    } finally {
+      doneBatches++
+      opts.onProgress?.(Math.min(doneBatches * BATCH_SIZE, targets.length), targets.length)
     }
-    opts.onProgress?.(Math.min(i + BATCH_SIZE, targets.length), targets.length)
-  }
+  })
+
+  const results = grouped.flat()
+  const failedCount = Math.max(0, targets.length - results.length)
 
   // OCR 去重：保留视觉内容唯一（或 OCR 明显不同）的帧
   const keptOcr: string[] = []

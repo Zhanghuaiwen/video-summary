@@ -1,6 +1,7 @@
 import type { MindMapDoc, MindMapNode } from '@shared/types'
 import { chatJson, type ChatOptions } from './llm'
 import { sanitizeTreeNode, walk } from '@shared/mindmap-util'
+import { fmtTime } from './timeline'
 
 export interface MindMapInput {
   title: string
@@ -10,10 +11,17 @@ export interface MindMapInput {
   summaryDigest: string
   /** 画面关键帧简报（含 OCR 文字与描述），用于把画面/PPT 内容纳入导图 */
   visionBrief?: string
+  /** 视频真实总时长（秒）。提供时写入提示词，约束节点时间不得越界 */
+  durationSec?: number
 }
 
 function buildPrompt(input: MindMapInput): string {
-  const { title, timedTranscript, summaryDigest, visionBrief } = input
+  const { title, timedTranscript, summaryDigest, visionBrief, durationSec } = input
+  const durSec = durationSec !== undefined && durationSec > 0 ? Math.round(durationSec) : undefined
+  // 明确告知总时长并禁止越界，避免模型照搬示例里的 3600 或自行外推出片尾之后的时间
+  const durationRule = durSec !== undefined
+    ? `\n4. 视频总时长为 ${fmtTime(durSec)}（共 ${durSec} 秒）。每个节点的 start/end 必须满足 0 ≤ start ≤ end ≤ ${durSec}；定位不到或超出总时长的知识点直接省略 start/end，严禁编造。`
+    : ''
   return `你是一位资深知识整理专家。请把视频《${title}》的内容整理成一张真正有知识结构、尽量完整细致的思维导图。
 
 输入材料：
@@ -38,9 +46,9 @@ ${visionBrief ? `\n画面信息（关键帧 OCR 与描述）：\n${visionBrief}`
   - summary：一句话摘要（可选）
   - content：对重要知识点给出 1~2 句详细解释（可选）
   - keywords：2~6 个关键词（可选）
-  - start/end：根据文字稿的时间标记推断该知识块对应的视频时间段（单位秒）；推断不出就省略
+  - start/end：根据文字稿的时间标记推断该知识块对应的视频时间段（单位秒）；推断不出就省略${durationRule}
 - 只输出 JSON，格式：
-{"title":"主题","root":{"title":"主题","summary":"...","start":0,"end":3600,"children":[{"title":"...","summary":"...","keywords":["..."],"start":120,"end":300,"content":"...","children":[...]}]}}`
+{"title":"主题","root":{"title":"主题","summary":"...","children":[{"title":"...","summary":"...","keywords":["..."],"start":120,"end":300,"content":"...","children":[...]}]}}`
 }
 
 export async function generateMindMap(
@@ -73,14 +81,20 @@ export function createMindMapDoc(projectId: string, title: string, root: MindMap
 /**
  * 把整棵导图节点的时间区间钳制到真实媒体时长内（防御 LLM 依据错误文字稿标签
  * 推断出超长区间，例如 40s 视频的节点被标成 0~600s）。duration<=0 时不改动。
+ * 完全落在片尾之后的区间（start >= duration）直接丢弃——若两端都钳制到时长，
+ * 会产生大量「22:57 - 22:57」这类退化的零长区间；零长区间（start==end）同样无效。
  */
 export function clampMindMapTimes(root: MindMapNode, duration: number): MindMapNode {
   if (!(duration > 0)) return root
   walk(root, (n) => {
     if (!n.timeRange) return
-    const start = Math.max(0, Math.min(n.timeRange.start, duration))
+    if (n.timeRange.start >= duration) {
+      n.timeRange = undefined
+      return
+    }
+    const start = Math.max(0, n.timeRange.start)
     const end = Math.max(start, Math.min(n.timeRange.end, duration))
-    n.timeRange = { start, end }
+    n.timeRange = end > start ? { start, end } : undefined
   })
   return root
 }

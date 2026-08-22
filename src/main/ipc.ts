@@ -271,7 +271,8 @@ const { generateMindMap, createMindMapDoc, clampMindMapTimes } = await import('.
           title: summary.title,
           timedTranscript: capTimedTranscript(vision.segments),
           summaryDigest: buildSummaryDigest(summary),
-          visionBrief: vision.frames.length > 0 ? buildVisionBrief(vision.frames) : undefined
+          visionBrief: vision.frames.length > 0 ? buildVisionBrief(vision.frames) : undefined,
+          durationSec: mediaDuration
         },
         { customPrompt: project.analysisConfig?.customPrompt?.trim() || undefined, model: getConfig().llmModel }
       )

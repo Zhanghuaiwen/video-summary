@@ -370,7 +370,13 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
           const digest = buildSummaryDigest(summary)
           const timed = capTimedTranscript(visionDoc.segments)
           const root = await generateMindMap(
-            { title: summary.title, timedTranscript: timed, summaryDigest: digest, visionBrief },
+            {
+              title: summary.title,
+              timedTranscript: timed,
+              summaryDigest: digest,
+              visionBrief,
+              durationSec: mediaDuration
+            },
             { customPrompt, signal, model: llmModel }
           )
           clampMindMapTimes(root, mediaDuration ?? 0)

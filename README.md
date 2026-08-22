@@ -247,6 +247,12 @@ A：仅上传「视频音频 → 硅基流动」用于转写、以及「转写�
   - 断点续跑读取旧 `vision.json` 时按真实时长重算时间轴；
   - `src/main/services/mindmap.ts` 新增 `clampMindMapTimes`：生成/重新生成导图后把全部节点 `timeRange` 钳制到媒体时长内（防御性兜底）。
 
+**9. 思维导图出现大量「22:57 - 22:57」退化时间区间**
+- 原因：LLM 为部分节点推断出**完全落在片尾之后**的时间区间；旧的 `clampMindMapTimes` 会把 start/end 同时钳制到媒体时长，产生一堆零长的「22:57 - 22:57」。此外提示词示例里的 `"end":3600` 会诱导模型输出超出总时长的数值。
+- 修复：
+  - `src/main/services/mindmap.ts` `clampMindMapTimes`：start ≥ 时长（整体越界）或 start == end 的区间直接丢弃，只保留钳制后有意义的部分重叠区间；
+  - 提示词新增视频总时长约束（`durationSec`，由 `pipeline.ts` / `ipc.ts` 传入真实探测时长），明确「0 ≤ start ≤ end ≤ 总时长，定位不到就省略」，并从 JSON 示例中移除误导性的固定 end 值。
+
 ---
 
 ## ⚠️ 免责声明

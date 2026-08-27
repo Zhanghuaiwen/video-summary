@@ -9,6 +9,7 @@ import {
   type MindMapDoc,
   type MindMapExportFormat,
   type ProgressPayload,
+  type ProjectUpdatedPayload,
   type Project,
   type SaveMindMapInput,
   type SummaryDoc,
@@ -62,6 +63,12 @@ const api = {
     const listener = (_e: unknown, payload: ProgressPayload): void => cb(payload)
     ipcRenderer.on(IpcChannels.events.progress, listener)
     return () => ipcRenderer.removeListener(IpcChannels.events.progress, listener)
+  },
+
+  onProjectUpdated: (cb: (payload: ProjectUpdatedPayload) => void): (() => void) => {
+    const listener = (_e: unknown, payload: ProjectUpdatedPayload): void => cb(payload)
+    ipcRenderer.on(IpcChannels.events.projectUpdated, listener)
+    return () => ipcRenderer.removeListener(IpcChannels.events.projectUpdated, listener)
   }
 }
 

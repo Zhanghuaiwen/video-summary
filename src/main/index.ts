@@ -2,7 +2,7 @@ import { app, shell, BrowserWindow, protocol } from 'electron'
 import { join, sep, extname } from 'path'
 import { createReadStream, existsSync, statSync } from 'fs'
 import { Readable } from 'stream'
-import { registerIpc } from './ipc'
+import { registerIpc, sendProjectUpdated } from './ipc'
 import { createStore, type Store } from './store'
 import { getConfig } from './services/config'
 
@@ -146,7 +146,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  const store = createStore()
+  const store = createStore(sendProjectUpdated)
   registerMediaProtocol(store)
   registerIpc(store)
 

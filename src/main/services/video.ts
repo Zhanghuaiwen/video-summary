@@ -72,7 +72,8 @@ export async function downloadMedia(url: string, workDir: string, onProgress: (p
         const m = PROGRESS_RE.exec(line)
         if (m) onProgress(Math.min(parseFloat(m[1]), 99.9))
       }
-    }
+    },
+    { allowNonZero: true }
   )
   // 下载结束后的成品文件解析：
   // - 多格式下载会先产生 media.f30077.mp4 / media.f30280.m4a 等部分文件，合并后再删掉它们，

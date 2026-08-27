@@ -18,7 +18,7 @@ export interface Store {
   projectWorkDir: (id: string) => string
 }
 
-export function createStore(): Store {
+export function createStore(onProjectUpdated?: (project: Project) => void): Store {
   const userDataDir = app.getPath('userData')
   const file = join(userDataDir, 'store.json')
 
@@ -78,6 +78,7 @@ export function createStore(): Store {
       if (idx === -1) return
       data.projects[idx] = { ...data.projects[idx], ...patch, updatedAt: new Date().toISOString() }
       persist()
+      onProjectUpdated?.(data.projects[idx])
     },
 
     projectWorkDir

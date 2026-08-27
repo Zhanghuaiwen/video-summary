@@ -52,3 +52,38 @@ export async function prepareAudioSegments(input: string, workDir: string): Prom
   const full = await extractAudio(input, join(workDir, 'audio'))
   return splitAudio(full, join(workDir, 'seg'))
 }
+
+const SILENCE_RE = /silence_start:\s*(\d+(?:\.\d+)?)/g
+
+/**
+ * 在整段音频上用 ffmpeg silencedetect 检测停顿点，返回每个「停顿开始」的绝对时间（秒，升序）。
+ * 说话自然停顿处即句子/意群边界，可作为句子级时间戳的真实锚点（无需任何额外模型）。
+ * 失败或无可检测停顿时返回空数组，调用方回退到字符占比插值。
+ */
+export async function detectSilences(fullMp3: string, noise = -40, minDur = 0.35): Promise<number[]> {
+  try {
+    const res = await runCommand(
+      ffmpegPath,
+      [
+        '-hide_banner',
+        '-i',
+        fullMp3,
+        '-af',
+        `silencedetect=noise=${noise}dB:d=${minDur}`,
+        '-f',
+        'null',
+        '-'
+      ],
+      {},
+      { allowNonZero: true }
+    )
+    const out: number[] = []
+    for (const m of res.stderr.matchAll(SILENCE_RE)) {
+      const t = parseFloat(m[1])
+      if (Number.isFinite(t) && t > 0) out.push(t)
+    }
+    return out.sort((a, b) => a - b)
+  } catch {
+    return []
+  }
+}

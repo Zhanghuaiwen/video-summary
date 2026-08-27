@@ -33,6 +33,8 @@ export interface ProjectCheckpoint {
   visionDone?: boolean
   summaryDone?: boolean
   mindmapDone?: boolean
+  /** 转写阶段检测到的真实停顿时间点（秒），用于句子级时间戳锚点；断点续跑时直接复用，避免重跑检测 */
+  silenceTimes?: number[]
 }
 
 export interface Project {
@@ -195,6 +197,11 @@ export interface ProgressPayload {
   message?: string
 }
 
+/** 项目完整数据更新（每次 store.updateProject 后推送），用于前端实时刷新标题/媒体路径等字段 */
+export interface ProjectUpdatedPayload {
+  project: Project
+}
+
 export interface IpcResult<T = unknown> {
   ok: boolean
   data?: T
@@ -261,6 +268,7 @@ export const IpcChannels = {
     recent: 'mindmap:recent'
   },
   events: {
-    progress: 'project:progress'
+    progress: 'project:progress',
+    projectUpdated: 'project:updated'
   }
 } as const

@@ -22,6 +22,7 @@ export default function App(): React.JSX.Element {
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   const setProjects = useAppStore((s) => s.setProjects)
   const applyProgress = useAppStore((s) => s.applyProgress)
+  const applyProjectUpdated = useAppStore((s) => s.applyProjectUpdated)
   const setConfig = useAppStore((s) => s.setConfig)
 
   useEffect(() => {
@@ -32,9 +33,13 @@ export default function App(): React.JSX.Element {
       localStorage.setItem('vs-theme', c.theme)
       applyAccent(c.accent)
     }).catch(console.error)
-    const unsub = client.onProgress(applyProgress)
-    return unsub
-  }, [setProjects, setConfig, applyProgress])
+    const unsubProgress = client.onProgress(applyProgress)
+    const unsubUpdated = client.onProjectUpdated(applyProjectUpdated)
+    return () => {
+      unsubProgress()
+      unsubUpdated()
+    }
+  }, [setProjects, setConfig, applyProgress, applyProjectUpdated])
 
   return (
     <div className="flex h-full overflow-hidden bg-[var(--bg)]">

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppConfig, ProgressPayload, Project } from '@shared/types'
+import type { AppConfig, ProgressPayload, Project, ProjectUpdatedPayload } from '@shared/types'
 
 export type PageKey = 'home' | 'library' | 'doc' | 'mindmap'
 
@@ -12,6 +12,7 @@ interface AppState {
   setPage: (page: PageKey) => void
   setProjects: (projects: Project[]) => void
   applyProgress: (payload: ProgressPayload) => void
+  applyProjectUpdated: (payload: ProjectUpdatedPayload) => void
   setSelectedProject: (id: string | null) => void
   setConfig: (config: AppConfig) => void
   setSettingsOpen: (open: boolean) => void
@@ -40,6 +41,11 @@ export const useAppStore = create<AppState>((set) => ({
             }
           : p
       )
+    })),
+
+  applyProjectUpdated: (payload) =>
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === payload.project.id ? payload.project : p))
     })),
 
   setSelectedProject: (selectedProjectId) => set({ selectedProjectId }),

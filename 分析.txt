@@ -1,0 +1,684 @@
+八、但是这里存在一个隐藏 Bug
+
+看这里：
+
+if (endTime <= startTime)
+  endTime = startTime + Math.min(segmentSeconds, 1)
+
+假设：
+
+startTime = 590
+mediaDuration = 600
+segmentSeconds = 600
+
+由于前面：
+
+endTime = Math.min(..., 600)
+
+可能出现：
+
+endTime = 590
+
+然后：
+
+endTime = 590 + 1
+
+结果：
+
+590 → 591
+
+但是如果：
+
+mediaDuration = 590
+
+那么：
+
+start = 590
+end = 590
+
+你又强行变成：
+
+590 → 591
+
+直接超过视频实际长度。
+
+所以这里应该再次 clamp：
+
+endTime = Math.min(
+  mediaDuration ?? Infinity,
+  startTime + Math.min(segmentSeconds, 1)
+)
+
+当然更根本的是：
+
+如果 startTime >= mediaDuration，这个 segment 应该直接丢掉，而不是硬造一个 1 秒区间。
+
+九、关键帧是怎么进去的？
+
+这里：
+
+const frameTimes = frames
+  .filter((f) => f.time >= startTime && f.time < endTime)
+  .map((f) => f.time)
+
+例如：
+
+Segment：
+
+0 ───────── 300
+
+关键帧：
+
+30
+120
+280
+350
+
+那么：
+
+frameTimes = [30, 120, 280]
+
+350 不属于这个 segment。
+
+这个逻辑没问题。
+
+十、然后进入真正有问题的地方：refineSegments
+
+你原来的：
+
+0 ───────────────────── 300
+        一个 ASR 大段
+
+里面可能有：
+
+大家好。
+今天我们讲数据库。
+数据库是一种……
+首先……
+最后……
+
+你希望把它拆成：
+
+0 ── 50 ── 100 ── 150 ── 220 ── 300
+│     │      │      │      │
+句1   句2     句3    句4    句5
+
+这就是：
+
+refineSegments()
+十一、第一步：splitSentences
+const SENTENCE_ENDS = new Set([
+  '。', '！', '？',
+  '!', '?', '；', ';',
+  '\n'
+])
+
+然后：
+
+splitSentences(text)
+
+例如：
+
+大家好。今天我们讲数据库。首先我们来看表。
+
+得到：
+
+[
+  "大家好。",
+  "今天我们讲数据库。",
+  "首先我们来看表。"
+]
+
+这一步是：
+
+文本切分
+
+不是时间切分。
+
+这点一定要理解。
+
+十二、packSentences 是第二次切分
+
+你不是直接：
+
+一句 = 一个时间块
+
+因为可能有这种情况：
+
+一句：
+今天我们来详细介绍数据库系统的基本组成、关系模型、事务管理、并发控制以及数据库系统在现代企业软件架构中的作用。
+
+这一句话可能 100 字。
+
+所以：
+
+blockChars = 240
+
+你的意思是：
+
+一个 TimelineSegment 最多尽量放 240 个字符。
+
+于是：
+
+句1
+句2
+句3
+
+可能被打包成：
+
+Block 1 = 句1 + 句2 + 句3
+Block 2 = 句4 + 句5
+
+这其实是合理的。
+
+十三、但是你这里有一个明显的逻辑错误
+if (buf.length + s.length + 1 > maxChars)
+
+你这里永远加：
+
++ 1
+
+但是你真正拼接的时候：
+
+buf = joinSentences(buf, s)
+
+joinSentences() 有可能：
+
+return a + b
+
+也就是说：
+
+中文 + 中文
+
+实际上没有那个 1。
+
+所以你的长度判断并不准确。
+
+虽然这是小问题，但可以修。
+
+更合理：
+
+const merged = joinSentences(buf, s)
+
+if (merged.length > maxChars) {
+   ...
+}
+
+这样最准确。
+
+十四、真正最大的 Bug：silenceTimes
+
+你的注释说：
+
+优先使用真实停顿时间作为句子边界骨架
+
+看起来非常牛。
+
+但是实际上你的代码：
+
+boundaries = [
+  seg.startTime,
+  ...silInSeg,
+  seg.endTime
+]
+
+例如：
+
+真实停顿：
+
+20s
+100s
+280s
+
+得到：
+
+0
+20
+100
+280
+300
+
+然后：
+
+lerpToBoundaries(boundaries, p)
+十五、关键问题就在这里
+
+假设你有 4 个句子：
+
+句1
+句2
+句3
+句4
+
+那么：
+
+p：
+
+0
+0.25
+0.5
+0.75
+1
+
+你实际上是在整个：
+
+0 → 300
+
+上均匀取：
+
+0
+75
+150
+225
+300
+
+然后 lerpToBoundaries() 只是把这些点映射到停顿骨架。
+
+注意：
+
+它并没有要求句子的边界必须落在 silence 上。
+
+它只是：
+
+整体时间比例
+       ↓
+停顿骨架
+       ↓
+重新插值
+
+所以它并不是：
+
+“句子结束时间 = 最近的真实停顿”
+
+而是：
+
+“把真实停顿当作时间轴形状，然后按比例分配句子。”
+
+这是两回事。
+
+十六、举个特别直观的例子
+
+真实讲话：
+
+0s     10s         100s        110s
+│      │             │            │
+开始   停顿          停顿         结束
+
+假设 3 个句子：
+
+句1
+句2
+句3
+
+你的算法可能得到：
+
+0 → 36.7
+36.7 → 73.3
+73.3 → 110
+
+但真实讲话可能实际上：
+
+句1：0 → 10
+句2：10 → 100
+句3：100 → 110
+
+差得巨大。
+
+所以你现在的：
+
+silenceTimes
+
+实际上没有发挥它应该发挥的作用。
+
+十七、这也是我认为这段代码最大的设计问题
+
+你的注释：
+
+“优先使用真实停顿时间”
+
+实际上代码实现的是：
+
+“使用真实停顿作为非均匀时间轴，然后按照句子数量进行比例插值。”
+
+所以：
+
+注释说的：
+句子边界 ≈ silence
+实际做到：
+句子边界 = 基于 silence 形状的比例插值
+
+这会导致一个很严重的问题：
+
+如果视频里：
+
+说一句话
+↓
+停顿 5 秒
+↓
+说很多话
+↓
+停顿 0.2 秒
+↓
+继续说
+
+你的算法可能把句子均匀分配过去。
+
+十八、还有一个更严重的问题：你根本不知道哪个 silence 对应哪个句子
+
+这是时间轴系统里最关键的认知。
+
+你现在只有：
+
+text
+startTime
+silenceTimes
+
+比如：
+
+文本：
+
+A。B。C。D。
+
+时间：
+
+0 → 100
+
+停顿：
+
+20
+80
+
+你知道：
+
+20 秒有停顿
+80 秒有停顿
+
+但是你不知道：
+
+20 秒是不是 A 结束？
+
+还是：
+
+20 秒是 A 中间的停顿？
+
+因为你没有：
+
+ASR word-level timestamps
+
+所以：
+
+仅凭 silenceTimes，无法精确实现“句子级时间对齐”。
+
+这个非常重要。
+
+十九、你真正需要的应该是什么？
+
+如果你想把这个项目做到面试官看到会觉得：
+
+“这不是简单调 API，这是确实做过时间对齐。”
+
+最好的数据应该是：
+
+WordTimestamp {
+  word: string
+  start: number
+  end: number
+}
+
+例如：
+
+大家       0.0 - 0.4
+好         0.4 - 0.7
+今天       1.2 - 1.6
+我们       1.6 - 1.9
+讲         1.9 - 2.1
+数据库     2.1 - 2.8
+
+那么你就可以真正做到：
+
+大家好。        0.0 → 0.7
+今天我们讲数据库。1.2 → 2.8
+
+这才是真正的：
+
+ASR word-level alignment → sentence-level segmentation
+
+二十、你的架构现在其实是这个
+             ┌──────────────┐
+             │      ASR     │
+             └──────┬───────┘
+                    │
+                    ▼
+            TranscriptBlock
+             startTime + text
+                    │
+                    ▼
+             buildTimeline
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+          ▼                   ▼
+       Transcript          KeyFrames
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+             coarse Timeline
+                    │
+                    ▼
+             refineSegments
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+          ▼                   ▼
+      splitSentence       silenceTimes
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+             时间比例插值
+                    │
+                    ▼
+            refined Timeline
+                    │
+                    ▼
+          buildTimedTranscript
+                    │
+                    ▼
+                   LLM
+                    │
+                    ▼
+             思维导图时间节点
+
+这个架构本身是很合理的。
+
+问题主要出在：
+
+              时间对齐精度
+                    ↓
+ASR segment ──→ sentence
+                    ↑
+               这里不够准
+二十一、还有一个隐藏 Bug：buildTimedTranscript
+
+你这里：
+
+const refined = refineSegments(segments, blockChars)
+
+注意！
+
+你没有传：
+
+silenceTimes
+
+所以：
+
+buildTimedTranscript()
+
+调用的 refine：
+
+refineSegments(segments, blockChars)
+
+实际上：
+
+silenceTimes = []
+
+也就是说：
+
+你前面辛辛苦苦使用 silenceTimes 做了一遍细化，但这里又重新 refine 了一次，而且完全没有 silence。
+
+这非常容易导致逻辑不一致。
+
+二十二、这个问题我建议你优先改
+
+现在：
+
+buildTimeline()
+    ↓
+refineSegments(..., silenceTimes)
+
+已经得到：
+
+精细 Timeline
+
+但是：
+
+buildTimedTranscript()
+
+又：
+
+refineSegments(segments)
+
+重新细化。
+
+这会造成：
+
+Timeline UI
+      ↓
+使用 silence
+
+LLM Transcript
+      ↓
+不用 silence
+
+于是可能出现：
+
+UI：
+
+[01:20 - 01:35]
+数据库事务……
+
+LLM：
+
+[01:18 - 01:34]
+数据库事务……
+
+两套时间。
+
+这对你这种视频总结 + 思维导图 + 时间跳转项目来说非常不好。
+
+二十三、正确架构应该是：只细化一次
+
+最好：
+
+ASR
+ ↓
+coarse segments
+ ↓
+refine
+ ↓
+FINAL TimelineSegment
+ ↓
+ ├── UI
+ ├── 视频跳转
+ ├── 关键帧
+ ├── transcriptWithTimes
+ └── LLM
+
+也就是说：
+
+TimelineSegment 应该成为唯一的“Single Source of Truth”。
+
+这个概念你面试的时候甚至可以直接说：
+
+我把 Transcript、KeyFrame 和时间区间统一抽象成 TimelineSegment，后续 UI、视频跳转和 LLM 都消费同一套时间轴数据，避免多个模块各自计算时间导致时间漂移。
+
+这个就已经很像一个成熟项目的设计了。
+
+二十四、还有一个问题：frameTimes 丢失
+
+在 refineSegments()：
+
+out.push({
+  startTime: start,
+  endTime: end,
+  transcript: parts[j],
+  frameTimes: []
+})
+
+然后后面再：
+
+for (const ft of seg.frameTimes ?? []) {
+
+重新塞进去。
+
+逻辑上可以。
+
+但这里：
+
+const hit = out.slice(beginIdx)
+
+每个 frame 都会：
+
+重新创建 slice
+然后 find
+
+如果：
+
+segments = 1000
+frames = 5000
+
+性能会比较差。
+
+虽然你的视频总结项目一般不会大到离谱，但可以优化成：
+
+双指针
+
+或者直接通过二分查找。
+
+二十五、makeTranscriptByTime 也有性能问题
+const seg = segments.find(
+  (s) => time >= s.startTime && time < s.endTime
+)
+
+假设：
+
+视频 2 小时
+segments = 2000
+
+用户拖动进度条：
+
+每次 mousemove
+→ find 2000 个 segment
+
+如果：
+
+60 FPS
+
+就有很多重复搜索。
+
+因为你的时间轴本身是：
+
+有序的
+
+所以完全可以：
+
+二分查找
+
+把：
+
+O(n)
+
+变成：
+
+O(log n)
+
+不过如果只有几百段，这属于优化项，不是当前核心问题。

@@ -253,6 +253,56 @@ A：仅上传「视频音频 → 硅基流动」用于转写、以及「转写�
   - `src/main/services/mindmap.ts` `clampMindMapTimes`：start ≥ 时长（整体越界）或 start == end 的区间直接丢弃，只保留钳制后有意义的部分重叠区间；
   - 提示词新增视频总时长约束（`durationSec`，由 `pipeline.ts` / `ipc.ts` 传入真实探测时长），明确「0 ≤ start ≤ end ≤ 总时长，定位不到就省略」，并从 JSON 示例中移除误导性的固定 end 值。
 
+**10. 新建项目后标题不显示、且「该任务没有可播放的媒体文件」（第一遍不对、重启后正常）**
+- 现象：点「开始解析」后立即跳到项目库，标题仍是默认「B站视频」、播放器提示无媒体；但任务在后台跑完后，重启应用再进项目库就一切正常。
+- 根因：**前端只在提交瞬间 `listProjects()` 拉了一次快照**，而标题/媒体路径是后台管线异步写入 store 的。后端每次 `store.updateProject` 都会落盘，但前端老的 `applyProgress` 只合并 `stage/progress/error`，把 `title`/`mediaPath` 等字段全部丢弃——所以前端一直显示创建时的陈旧快照。这与「下载失败」无关，是纯前端实时刷新缺失。
+- 修复（全链路实时推送完整 project）：
+  - `src/shared/types.ts`：新增 `project:updated` 事件通道 + `ProjectUpdatedPayload { project }` 类型；
+  - `src/main/store.ts`：`createStore(onProjectUpdated?)` 注入回调，`updateProject` 写盘后调用它，把完整 project 推出去；
+  - `src/main/ipc.ts` + `src/main/index.ts`：新增模块级 `sendProjectUpdated` 并在创建 store 时注入；
+  - `src/renderer`：`preload/index.ts` 与 `api/client.ts` 新增 `onProjectUpdated`，`store/appStore.ts` 新增 `applyProjectUpdated`（用完整 project 替换列表项），`App.tsx` 订阅该事件。
+  - 效果：标题/媒体路径/各产物路径一旦落盘即实时反映到项目库，不再需要重启。
+
+**11. 视频下载偶发「下载了文件却判定失败 / 没有可播放媒体」（yt-dlp 退出码误判）**
+- 现象：B站视频在 Windows 上偶发「下载阶段报错」，但工作目录里其实有 `media.mp4` 残片。
+- 根因：`downloadMedia` 用 `runCommand` 调用 yt-dlp，而 `runCommand` 默认零容忍非零退出码。yt-dlp 在 Windows 上偶发非零退出（即便成品 `media.mp4` 已生成），导致整条管线 `catch` 进 `failed`，`mediaPath` 从未写入 store → 项目库判定「无媒体」。
+- 修复（`src/main/services/video.ts`）：给 yt-dlp 的 `runCommand` 调用加 `{ allowNonZero: true }`，成功判定改为「成品 `media.mp4` 是否真实存在」，不再被退出码误杀。
+
+**12. 关键帧时间点偏差 + 思维导图节点时间模糊不准（SenseVoice 无时间戳的根因与根治）**
+- 根因调研：**转写用的是 `FunAudioLLM/SenseVoiceSmall`，经 OpenAI 兼容接口 `/audio/transcriptions` 只返回整段 `text`，零时间戳**。因此句子级时间只能靠线性插值（旧 `timeline.ts` 在每 60s 段内按字符占比均匀摊开），本质是「假设语速均匀」，必然漂移，越往后误差越大；关键帧固定采样也曾用「请求时刻 `-ss t`」而非实际帧 `pts_time`，也有 ±0.5s 偏差。
+- 修复（不引入任何新模型/新依赖，纯工程方案）：
+  - **关键帧真实 pts**（`src/main/services/frames.ts`）：固定采样抽帧加 `-vf showinfo`，回读返回帧的真实 `pts_time` 作为时间点，消除 `-ss` 寻址偏差；
+  - **句子级时间戳改用真实停顿边界**（`src/main/services/audio.ts` + `timeline.ts`）：新增 `detectSilences()` 用 ffmpeg `silencedetect` 在整段音频上检测停顿点（说话自然停顿即句子边界），把这些真实时间点作为锚点骨架，在骨架上按句子数定位每句起止——精度从「字符线性插值」升级到「真实停顿边界（秒级）」；无停顿点时回退到字符插值；
+  - **管线接入**（`src/main/services/pipeline.ts`）：转写前先 `detectSilences`，把 `silenceTimes` 传给 `buildTimeline` → `refineSegments`；视觉阶段 `runVisionStage` 也复用同一组停顿点，保证导图节点时间与语音对齐一致。
+- 说明：因 SenseVoice 本身不出词级时间戳，若不引入 faster-whisper 等额外模型，本方案（ffmpeg 静音检测 + 真实 pts）是精度与成本的最优折中；长段连续念稿无停顿时，时间精度会退化为段内插值，但已远优于旧实现。
+
+**13. 断点续跑丢失真实停顿点（sentence 时间回退到字符插值）**
+- 现象：任务失败/取消后点「继续」，从断点恢复时句子级时间戳变回旧的模糊插值结果。
+- 根因：`silenceTimes`（真实停顿点）是运行时检测产物，未写入 `checkpoint`，断点恢复分支拿不到 → 回退空数组 → 字符插值。
+- 修复：
+  - `src/shared/types.ts`：`ProjectCheckpoint` 新增 `silenceTimes?: number[]`；
+  - `src/main/services/pipeline.ts`：转写阶段完成后把 `silenceTimes` 写入 `checkpoint`；断点恢复（`reuseTranscribe`）时从 `cp.silenceTimes` 复用，句子级时间轴无需重跑静音检测。
+
+**14. `npm run dev` / `npm run build` 直接失败（主进程打包报错）**
+- 现象：`npm run dev` 或 `npm run build` 启动即报 `src/main/index.ts: "sendProjectUpdated" is not exported by "src/main/ipc.ts"`。
+- 根因：新增 `project:updated` 实时推送时，`src/main/index.ts` 从 `./ipc` 导入了 `sendProjectUpdated`，但 `ipc.ts` 里把它定义成了模块内部的 `const`（未 `export`），rollup 打包阶段即失败，导致整个 dev/build 无法启动。
+- 修复（`src/main/ipc.ts`）：将 `const sendProjectUpdated` 改为 `export const sendProjectUpdated`。`npm run build` 现已通过（`✓ built`），dev 同步恢复。
+
+**15. 时间轴时间戳精度与一致性缺陷（依据 `分析.txt` 复盘修复）**
+- 现象 / 根因（共 5 处，均在 `src/main/services/timeline.ts`）：
+  1. **结尾越界（分析 §8）**：`buildTimeline` 中 `endTime` 先被 `mediaDuration` 钳制，若钳制后仍 `≤ startTime`，旧代码无条件 `endTime = startTime + 1`，会把段尾顶到真实视频时长之外（如 590s 视频算出 591s）；且 `start >= mediaDuration` 的退化段从未被丢弃。
+     - 修复：补齐时再次 `Math.min(..., mediaDuration)`，并在末尾 `.filter(s => s.endTime > s.startTime)` 丢弃退化段。
+  2. **两套时间（分析 §21-§22，优先级最高）**：`buildTimedTranscript`（导图文字稿）又调了一次 `refineSegments(segments, blockChars)` 且**没传 `silenceTimes`**，对「已细化过」的 segments 二次细化，且丢掉真实停顿对齐 → UI 时间轴与导图 LLM 文字稿时间轴不一致（同句差几秒）。
+     - 修复：删除二次 `refineSegments`，直接消费 `buildTimeline` 已细化好的 segments，使 `TimelineSegment` 成为 UI / 视频跳转 / 关键帧 / 导图 LLM 共用的**唯一时间源（Single Source of Truth）**。
+  3. **句子边界不落在真实停顿（分析 §14-§18）**：旧 `lerpToBoundaries` 只是把句子**按数量比例**映射到「停顿骨架」上做插值，句子边界实际落在停顿区间内部而非真实停顿点——注释声称「对齐真实停顿」但并未做到。
+     - 修复：新增 `snapBoundaries()`，以字符数作为说话时长代理算出每句比例位置，把边界**吸附到比例上最近的真实停顿**（`|差值| ≤ 0.5`）；无停顿或差值过大时回退线性比例，最后做单调修复保证时间严格递增。移除原 `lerpToBoundaries`。
+  4. **打包长度误判（分析 §13）**：`packSentences` 用 `buf.length + s.length + 1 > maxChars` 判断，但 `joinSentences` 在中文等场景并不加分隔符，导致长度判断偏保守/不准。
+     - 修复：直接 `const merged = joinSentences(buf, s); if (merged.length > maxChars)` 用真实拼接结果判断。
+  5. **性能：线性查找（分析 §24-§25）**：`makeTranscriptByTime` 每次查找用 `segments.find` 线性扫描（长视频 2000 段 × 60FPS 拖动）；`refineSegments` 关键帧重分配用 `out.slice(...).find` 双重循环。
+     - 修复：`makeTranscriptByTime` 改为对有序时间轴的二分查找（O(log n)）；关键帧重分配改用双指针，复杂度从 O(segments·frames) 降到 O(segments+frames)。
+- 说明：上述 §14-§18 指出，仅凭 `silenceTimes`（段落级停顿）无法做到「词级 / 句级」精确对齐，根治需 ASR 词级时间戳（如 faster-whisper）。本修复在不引入新模型的约束下，把边界吸附到真实停顿、并消除 UI 与导图的时间漂移，已是当前架构下的最优折中。
+- 验证：`npm run typecheck` 通过；`lerpToBoundaries` 已无引用残留。
+
 ---
 
 ## ⚠️ 免责声明

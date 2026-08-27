@@ -7,7 +7,7 @@ import { toErrorMessage } from '@shared/errors'
 import type { Store } from '../store'
 import { getConfig } from './config'
 import { fetchVideoTitle, downloadMedia, probeMediaDuration } from './video'
-import { prepareAudioSegments, SEGMENT_SECONDS } from './audio'
+import { prepareAudioSegments, detectSilences, SEGMENT_SECONDS } from './audio'
 import { transcribeBatch, type TranscriptBlock } from './transcriber'
 import { summarizeTranscript } from './summarizer'
 import { clearFramesDir, extractKeyFrames } from './frames'
@@ -202,6 +202,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
 
     // ---- 3. 转写（含音频分段；转写已完成则从断点数据恢复） ----
     let blocks: TranscriptBlock[] | undefined
+    let silenceTimes: number[] = []
     // 关键帧提取与转写并行：二者都只依赖媒体文件（提取耗时省在转写的网络等待里）
     const signal = ctx.controller.signal
     let framesPromise: Promise<KeyFrameInfo[] | null> = Promise.resolve(null)
@@ -223,12 +224,18 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
       if (reuseTranscribe) {
         blocks = readBlocks(dir)
         if (!blocks) throw new Error('转写断点数据缺失，请删除项目重新运行')
+        // 断点恢复：复用上次检测到的真实停顿点，句子级时间轴无需重跑静音检测
+        if (cp.silenceTimes && cp.silenceTimes.length > 0) silenceTimes = cp.silenceTimes
         setStage('transcribing', 100, '转写已完成（断点续跑）')
       } else {
         setStage('extracting', 5, '正在提取音频并分段…')
         const segments = await prepareAudioSegments(mediaPath, dir)
         checkCancelled()
         if (segments.length === 0) throw new Error('未能生成音频分段')
+        // 在整段音频上检测真实停顿点，作为句子级时间戳的锚点（无需额外模型）
+        setStage('extracting', 8, '正在检测语音停顿点…')
+        silenceTimes = await detectSilences(join(dir, 'audio', 'audio.mp3')).catch(() => [])
+        checkCancelled()
         setStage('transcribing', 0, '正在转写语音…')
         blocks = await transcribeBatch(segments, SEGMENT_SECONDS, (done, total) => {
           setStage('transcribing', Math.round((done / total) * 100), `正在转写 ${done}/${total} 段…`)
@@ -238,7 +245,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
         if (!transcript.trim()) throw new Error('转写结果为空')
         writeFileSync(join(dir, 'transcript.txt'), transcript, 'utf-8')
         writeFileSync(join(dir, 'blocks.json'), JSON.stringify({ asrModel, blocks }, null, 2), 'utf-8')
-        cp = { ...cp, asrModel, transcribeDone: true }
+        cp = { ...cp, asrModel, transcribeDone: true, silenceTimes }
         saveCheckpoint()
       }
       store.updateProject(projectId, { transcriptPath: join(dir, 'transcript.txt') })
@@ -246,7 +253,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
     checkCancelled()
 
     // ---- 4. 视觉分析（OCR + 画面描述）；与转写并行，先于总结（总结需要引用画面/OCR 信息） ----
-    const runVision = async (): Promise<{ visionDoc: VisionDoc; visionPath: string | undefined }> => {
+    const runVision = async (silenceTimes: number[] = []): Promise<{ visionDoc: VisionDoc; visionPath: string | undefined }> => {
       if (reuseVision) {
         const visionPath = join(dir, 'vision.json')
         const visionDoc = readJson<VisionDoc>(visionPath)
@@ -264,7 +271,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
       try {
         setStage('analyzing', 1, '正在提取关键帧…')
         const frames = await framesPromise
-        const visionDoc = await runVisionStage(mediaPath, dir, blocks!, analysis, visionModel, customPrompt, signal, setStage, mediaDuration, frames)
+        const visionDoc = await runVisionStage(mediaPath, dir, blocks!, analysis, visionModel, customPrompt, signal, setStage, mediaDuration, frames, silenceTimes)
         const visionPath = join(dir, 'vision.json')
         writeFileSync(visionPath, JSON.stringify(visionDoc, null, 2), 'utf-8')
         store.updateProject(projectId, { visionPath })
@@ -338,7 +345,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
       return { summaryPath, summaryError, summary }
     }
 
-    const visionRes = await runVision()
+    const visionRes = await runVision(silenceTimes)
     const visionDoc = visionRes.visionDoc
     const visionPath = visionRes.visionPath
     const visionBrief = visionDoc.frames.length > 0 ? buildVisionBrief(visionDoc.frames) : undefined
@@ -440,7 +447,8 @@ async function runVisionStage(
   signal: AbortSignal,
   setStage: (stage: PipelineStage, progress: number, message?: string) => void,
   mediaDuration?: number,
-  preFrames?: KeyFrameInfo[] | null
+  preFrames?: KeyFrameInfo[] | null,
+  silenceTimes: number[] = []
 ): Promise<VisionDoc> {
   let frames: KeyFrameInfo[] = []
 
@@ -463,7 +471,7 @@ async function runVisionStage(
     setStage('analyzing', 10, `已提取 ${extracted.length} 个关键帧，正在视觉分析…`)
 
     if (extracted.length > 0) {
-      const segments = buildTimeline(blocks, [], SEGMENT_SECONDS, mediaDuration)
+      const segments = buildTimeline(blocks, [], SEGMENT_SECONDS, mediaDuration, silenceTimes)
       const transcriptByTime = (t: number): string => {
         const seg = segments.find((s) => t >= s.startTime && t < s.endTime)
         return seg?.transcript ?? ''
@@ -485,6 +493,6 @@ async function runVisionStage(
     }
   }
 
-  const timeline = buildTimeline(blocks, frames, SEGMENT_SECONDS, mediaDuration)
+  const timeline = buildTimeline(blocks, frames, SEGMENT_SECONDS, mediaDuration, silenceTimes)
   return { frames, segments: timeline, createdAt: new Date().toISOString() }
 }

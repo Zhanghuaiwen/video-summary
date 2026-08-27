@@ -43,14 +43,17 @@ async function sampleFixed(
     const name = `fixed_${String(i).padStart(4, '0')}.jpg`
     const target = join(outDir, name)
     try {
-      await runCommand(
+      const res = await runCommand(
         ffmpegPath,
-        ['-hide_banner', '-ss', String(t), '-i', input, '-frames:v', '1', '-q:v', '3', '-y', target],
+        ['-hide_banner', '-ss', String(t), '-i', input, '-vf', 'showinfo', '-frames:v', '1', '-q:v', '3', '-y', target],
         {},
         { allowNonZero: true }
       )
       if (!existsSync(target)) throw new Error('未产出帧文件')
-      out.push([t, `frames/${name}`])
+      // 回读实际帧的真实呈现时间(pts_time)，而非请求时刻 t，消除 -ss 寻址带来的时间偏差
+      const m = SHOWINFO_RE.exec(res.stderr)
+      const real = m ? parseFloat(m[1]) : t
+      out.push([Number.isFinite(real) && real >= 0 ? real : t, `frames/${name}`])
       miss = 0
     } catch {
       miss++

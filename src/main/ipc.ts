@@ -27,6 +27,12 @@ const sendProgress: ProgressEmitter = (p) => {
   }
 }
 
+export const sendProjectUpdated = (project: Project): void => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IpcChannels.events.projectUpdated, { project })
+  }
+}
+
 const VIDEO_FILTERS = [
   { name: '视频/音频', extensions: ['mp4', 'mkv', 'webm', 'mov', 'avi', 'flv', 'm4v', 'mp3', 'm4a', 'wav', 'flac'] }
 ]

@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { client } from "@/api/client";
 import { useAppStore } from "@/store/appStore";
 import { toErrorMessage } from "@shared/errors";
 import type { SummaryDoc } from "@shared/types";
 import { normalizeSummaryDoc } from "@shared/summary-util";
-import { IconFolderOpen, IconPlay } from "@/components/icons";
+import { IconAlert, IconFolderOpen, IconPlay, IconRotate } from "@/components/icons";
 
 type TabKey = "summary" | "transcript";
 
@@ -25,6 +25,33 @@ export default function DocPage(): React.JSX.Element {
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const doRegenerateSummary = async (): Promise<void> => {
+    if (!project || regenerating) return;
+    setRegenerating(true);
+    try {
+      const s = await client.regenerateSummary(project.id);
+      setSummary(normalizeSummaryDoc(s));
+      showToast("总结已重新生成");
+    } catch (err) {
+      showToast(`重新生成失败：${toErrorMessage(err)}`);
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  const summaryEmpty = summary
+    ? summary.chapters.length === 0 && (summary.takeaways ?? []).length === 0
+    : false;
 
   const openFolder = async (id: string): Promise<void> => {
     try {
@@ -70,7 +97,7 @@ export default function DocPage(): React.JSX.Element {
     );
   }
 
-  if (!project || project.stage !== "done") {
+  if (!project || (project.stage !== "done" && project.stage !== "summarizing")) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-[var(--text-faint)]">
         {project
@@ -103,6 +130,15 @@ export default function DocPage(): React.JSX.Element {
           {summary?.title ?? project.title}
         </h2>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={() => void doRegenerateSummary()}
+            disabled={regenerating}
+            title="仅重新生成文字总结（复用已有转写结果，不动媒体与思维导图）"
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--accent-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent-text)] transition-colors hover:bg-[var(--accent-bg-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <IconRotate className="h-3.5 w-3.5" />
+            {regenerating ? "重新生成中…" : "重新生成总结"}
+          </button>
           {project.mediaPath && (
             <>
               <button
@@ -147,6 +183,28 @@ export default function DocPage(): React.JSX.Element {
 
       {tab === "summary" && summary && (
         <div className="mt-6 flex flex-col gap-5">
+          {regenerating && (
+            <div className="rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-bg-soft)] px-4 py-3 text-sm text-[var(--accent-text)]">
+              正在重新生成总结… 可能需要 1~3 分钟，请稍候
+            </div>
+          )}
+          {summaryEmpty && !regenerating && (
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--status-rose)]/35 bg-[var(--surface)] px-4 py-3">
+              <div className="flex items-center gap-2.5 text-sm leading-relaxed text-[var(--status-rose)]">
+                <IconAlert className="h-4 w-4 shrink-0" />
+                <span>
+                  上次未能生成有效总结（模型可能过慢或失败）。可在「设置」中检查/更换总结模型，或点击右侧重新生成。
+                </span>
+              </div>
+              <button
+                onClick={() => void doRegenerateSummary()}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--accent-bg)] px-2.5 py-1.5 text-xs font-medium text-[var(--accent-text)] transition-colors hover:bg-[var(--accent-bg-hover)]"
+              >
+                <IconRotate className="h-3.5 w-3.5" />
+                重新生成
+              </button>
+            </div>
+          )}
           <section className="card-raised overflow-hidden rounded-2xl border border-[var(--accent-border)] bg-[var(--accent-bg-soft)] p-5">
             <div className="text-[15px] font-semibold uppercase tracking-[0.12em] text-[var(--accent-text)]">
               核心概述
@@ -233,6 +291,10 @@ export default function DocPage(): React.JSX.Element {
                           alt={`画面 ${f.time}s`}
                           loading="lazy"
                           className="aspect-video w-full object-cover"
+                          onError={(e) => {
+                            // 帧文件缺失/路径幻觉时隐藏整块画面，避免破图占位
+                            e.currentTarget.closest('figure')?.remove()
+                          }}
                         />
                         <span className="absolute left-2 top-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur-sm">
                           {fmtTime2(f.time)}
@@ -263,6 +325,12 @@ export default function DocPage(): React.JSX.Element {
         <pre className="card-raised mt-6 max-h-[70vh] overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 text-sm leading-[1.85] text-[var(--text-secondary)]">
           {transcript}
         </pre>
+      )}
+
+      {toast && (
+        <div className="card-raised fixed left-1/2 top-4 z-50 max-w-md -translate-x-1/2 truncate rounded-xl border border-[var(--border-strong)] bg-[var(--toast-bg)] px-4 py-2.5 text-xs text-[var(--text-body)]">
+          {toast}
+        </div>
       )}
     </div>
   );

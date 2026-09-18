@@ -1,5 +1,5 @@
-import { join, dirname } from 'path'
-import { existsSync } from 'fs'
+import { join, dirname, extname } from 'path'
+import { existsSync, readdirSync, statSync } from 'fs'
 import ffmpegPath from 'ffmpeg-static'
 import { runCommand } from './process'
 import { ytDlpPath } from './bin'
@@ -32,6 +32,50 @@ export async function probeMediaDuration(input: string): Promise<number | undefi
   }
 }
 
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mkv', 'mov', 'm4v'])
+
+/**
+ * 在项目工作目录里寻找一份「完整可用」的视频文件（B 站 DASH 下载的合并产物或视频部分文件）。
+ * - 优先 media.mp4（yt-dlp 合并产物）；
+ * - 否则在 media.* 系列文件里找最完整的视频流部分（media.f30077.mp4 / media.f30080.mp4 等），跳过 .part 半成品与纯音频 m4a。
+ * 找不到返回 null。
+ */
+export function findBestVideoInDir(dir: string): string | null {
+  let files: string[]
+  try {
+    files = readdirSync(dir)
+  } catch {
+    return null
+  }
+  let best: string | null = null
+  let bestScore = 0
+  for (const f of files) {
+    if (!/^media\./.test(f) || f.endsWith('.part')) continue
+    const m = /\.[a-z0-9]+$/i.exec(f)
+    if (!m || !VIDEO_EXTS.has(m[0].slice(1).toLowerCase())) continue
+    let size = 0
+    try {
+      size = statSync(join(dir, f)).size
+    } catch {
+      continue
+    }
+    if (size <= 0) continue
+    const mergedBonus = f === 'media.mp4' ? 1 : 0
+    const score = size + mergedBonus
+    if (score > bestScore) {
+      bestScore = score
+      best = f
+    }
+  }
+  return best ? join(dir, best) : null
+}
+
+/** 判断媒体路径指向的是否为纯音频文件（m4a/mp3/...） */
+export function isAudioMediaPath(p: string): boolean {
+  const ext = extname(p).slice(1).toLowerCase()
+  return ext === 'm4a' || ext === 'mp3' || ext === 'aac' || ext === 'wav' || ext === 'flac' || ext === 'ogg'
+}
+
 export async function fetchVideoTitle(url: string): Promise<string> {
   const res = await runCommand(ytDlpPath(), [
     '--skip-download',
@@ -62,6 +106,19 @@ export async function downloadMedia(url: string, workDir: string, onProgress: (p
       // 必须显式指向本项目内置的 ffmpeg-static，否则合并失败只剩部分文件
       '--ffmpeg-location',
       dirname(ffmpegPath),
+      // B 站 DASH CDN 会按长连接限速（1080p 被压到 ~80KiB/s 并频繁断流）。
+      // 按 10MB 分块用 Range 请求逐块下，每个块都是新请求，绕过限速；实测提速约 40 倍。
+      '--http-chunk-size',
+      '10485760',
+      // B 站网络抖动频繁：拉高网页/下载/断点重试次数，避免偶发 "Unable to download webpage" 直接失败
+      '--retries',
+      '30',
+      '--fragment-retries',
+      '30',
+      '--retry-sleep',
+      '2',
+      '--file-access-retries',
+      '10',
       '--no-playlist',
       '--encoding',
       'utf-8',

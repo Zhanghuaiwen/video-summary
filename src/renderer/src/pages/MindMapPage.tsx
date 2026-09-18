@@ -387,6 +387,7 @@ export default function MindMapPage(): React.JSX.Element {
               node={selectedNode}
               root={doc.root}
               segments={segments}
+              projectId={project.id}
               canJump={Boolean(media.src)}
               onUpdate={(id, patch) => useMindMapStore.getState().updateNode(id, patch)}
               onAddChild={(pid) => useMindMapStore.getState().addChild(pid)}

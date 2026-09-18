@@ -71,6 +71,34 @@ function makeOverview(chapters: Chapter[]): string {
   return `该视频共涵盖 ${chapters.length} 个主题：${chapters.map((c) => c.title).join('、')}。`
 }
 
+function isUsableSummary(s: SummaryResult): boolean {
+  return s.chapters.length > 0 || s.takeaways.length > 0 || (typeof s.overview === 'string' && s.overview.length > 0 && s.overview !== '该视频未能生成概述。')
+}
+
+export async function summarizeTranscript(
+  transcript: string,
+  title: string,
+  onProgress: (pct: number) => void,
+  opts: ChatOptions = {},
+  visionBrief?: string
+): Promise<SummaryResult> {
+  const primary = await attempt(transcript, title, onProgress, opts, visionBrief)
+  if (isUsableSummary(primary)) return primary
+  // 主模型（可能很慢/超时/返回非法 JSON）产出为空时，用备用快速模型整体重试一次
+  const fallback = opts.fallbackModel && opts.fallbackModel !== opts.model
+  if (fallback) {
+    console.warn(
+      `[summarizer] 主模型（${opts.model ?? '默认'}）产出为空，改用备用模型 ${opts.fallbackModel} 重试一次`
+    )
+    onProgress(0)
+    const retry = await attempt(transcript, title, onProgress, { ...opts, model: opts.fallbackModel }, visionBrief)
+    if (isUsableSummary(retry)) return retry
+    console.warn('[summarizer] 备用模型产出仍为空，返回最后一次结果')
+    return retry
+  }
+  return primary
+}
+
 function splitChunks(text: string): string[] {
   const paragraphs = text
     .split(/\n+/)
@@ -159,7 +187,7 @@ ${visionBrief ? `\n另外附上视频关键帧画面信息（含画面文字 OCR
 只输出 JSON，格式：
 {"overview":"...","takeaways":["...","..."],"chapters":[{"title":"...","summary":"...","points":[{"text":"...","subPoints":["...","..."]}],"frames":[{"time":12,"path":"frames/xxx.jpg","ocr":"...","visual":"..."}]}]}`
 
-export async function summarizeTranscript(
+async function attempt(
   transcript: string,
   title: string,
   onProgress: (pct: number) => void,

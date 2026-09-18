@@ -18,6 +18,8 @@ export interface ChatOptions {
   timeoutMs?: number
   /** 覆盖当前总结模型（用于视觉模型等） */
   model?: string
+  /** 主模型结果为空/失败时自动重试的备用模型（如默认快速模型） */
+  fallbackModel?: string
   signal?: AbortSignal
   /** 用户自定义分析要求，作为独立系统层注入 */
   customPrompt?: string

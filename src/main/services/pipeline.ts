@@ -5,8 +5,8 @@ import type { KeyFrameInfo, MindMapDoc, PipelineStage, ProgressPayload, Project,
 import { DEFAULT_ANALYSIS_CONFIG } from '@shared/types'
 import { toErrorMessage } from '@shared/errors'
 import type { Store } from '../store'
-import { getConfig } from './config'
-import { fetchVideoTitle, downloadMedia, probeMediaDuration } from './video'
+import { getConfig, summaryFallbackModel } from './config'
+import { fetchVideoTitle, downloadMedia, probeMediaDuration, findBestVideoInDir } from './video'
 import { prepareAudioSegments, detectSilences, SEGMENT_SECONDS } from './audio'
 import { transcribeBatch, type TranscriptBlock } from './transcriber'
 import { summarizeTranscript } from './summarizer'
@@ -15,6 +15,7 @@ import { analyzeFrames, buildVisionBrief } from './vision'
 import { blocksToText, buildTimeline, buildTimedTranscript } from './timeline'
 import { generateMindMap, createMindMapDoc, clampMindMapTimes } from './mindmap'
 import { buildCacheKey, loadCacheDocs, saveCacheDocs, saveFramesDir, restoreFramesDir, sha1File } from './cache'
+import { attachChapterFrames, attachNodeFrames } from './frame-attach'
 import { normalizeChapterPoints } from '@shared/summary-util'
 
 export type ProgressEmitter = (p: ProgressPayload) => void
@@ -66,7 +67,17 @@ export function capTimedTranscript(segments: TimelineSegment[]): string {
   return buildTimedTranscript(segments)
 }
 
-export async function startPipeline(projectId: string, store: Store, emit: ProgressEmitter): Promise<void> {
+export interface StartPipelineOptions {
+  /** 强制从头分析，跳过缓存命中（用于「重新分析」） */
+  noCache?: boolean
+}
+
+export async function startPipeline(
+  projectId: string,
+  store: Store,
+  emit: ProgressEmitter,
+  opts: StartPipelineOptions = {}
+): Promise<void> {
   const ctx: RunningCtx = { cancelled: false, controller: new AbortController() }
   running.set(projectId, ctx)
 
@@ -117,35 +128,44 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
 
     // ---- 1. 媒体（已下载/本地文件则跳过下载） ----
     // B 站下载产物本应合并成 mp4 视频；若 mediaPath 只是纯音频（合并失败遗留的 m4a），
-    // 界面播放器会变成无画面的音频，且可能丢掉视频流。此类产物须重新下载合并。
+    // 界面播放器会变成无画面的音频。优先复用项目目录里已存在的完整视频部分文件，
+    // 只有确实找不到视频时才重新下载合并。
     const AUDIO_ONLY_EXTS = new Set(['m4a', 'mp3', 'aac', 'wav', 'flac', 'ogg'])
     const existingMedia = project.mediaPath ?? ''
-    const bilibiliPureAudio =
-      project.source === 'bilibili' &&
-      !!project.sourceUrl &&
+    const existingMediaIsVideo =
       !!existingMedia &&
-      existsSync(existingMedia) &&
-      AUDIO_ONLY_EXTS.has(extname(existingMedia).slice(1).toLowerCase())
+      !AUDIO_ONLY_EXTS.has(extname(existingMedia).slice(1).toLowerCase()) &&
+      existsSync(existingMedia)
+    const bilibiliPureAudio = project.source === 'bilibili' && !!project.sourceUrl && !!existingMedia && !existingMediaIsVideo
 
     let mediaPath = project.mediaPath ?? ''
-    if (mediaPath && existsSync(mediaPath) && !bilibiliPureAudio) {
-      // 已有可用媒体文件，跳过下载
-    } else {
-      if (mediaPath && existsSync(mediaPath)) {
-        // 清理旧 B 站纯音频产物的残留部分文件（media.f30080.mp4 / media.f30280.m4a 等），
-        // 避免重下载时与旧文件冲突
-        for (const f of readdirSync(dir)) {
-          if (/^media\./.test(f)) {
-            try {
-              unlinkSync(join(dir, f))
-            } catch {
-              // 忽略清理失败
-            }
+    if (existingMediaIsVideo) {
+      // 已有可用视频，跳过下载
+    } else if (bilibiliPureAudio && findBestVideoInDir(dir)) {
+      // 项目目录里留有完整视频部分文件（如 media.f30080.mp4 / media.mp4）：
+      // 直接改指到视频上，避免误删文件、重新下载
+      const video = findBestVideoInDir(dir)!
+      store.updateProject(projectId, { mediaPath: video })
+      console.log('[pipeline] 项目目录中存在完整视频，改为使用视频文件', video)
+      mediaPath = video
+    } else if (mediaPath && existsSync(mediaPath)) {
+      // 要真正重新下载：先清理旧 B 站纯音频/半成品部分文件（media.f30080.mp4.part / media.f30280.m4a 等），
+      // 避免重下载时与旧文件冲突
+      for (const f of readdirSync(dir)) {
+        if (/^media\./.test(f)) {
+          try {
+            unlinkSync(join(dir, f))
+          } catch {
+            // 忽略清理失败
           }
         }
-        store.updateProject(projectId, { mediaPath: '' })
       }
+      store.updateProject(projectId, { mediaPath: '' })
       mediaPath = ''
+    } else {
+      mediaPath = ''
+    }
+    if (!mediaPath) {
       if (project.source === 'bilibili' && project.sourceUrl) {
         setStage('downloading', 1, '正在获取视频信息…')
         const title = await fetchVideoTitle(project.sourceUrl)
@@ -179,7 +199,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
     const cacheKey = buildCacheKey({ mediaHash, asrModel, llmModel, visionModel, analysis })
 
     // ---- 缓存命中：把缓存的文档写回项目行，帧图从 cache/<key>/frames 还原 ----
-    const cached = loadCacheDocs(cacheKey)
+    const cached = opts.noCache ? null : loadCacheDocs(cacheKey)
     if (cached) {
       try {
         restoreFramesDir(cacheKey, dir)
@@ -201,6 +221,17 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
           m.createdAt = now
           m.updatedAt = now
           store.saveMindMap(projectId, m)
+        }
+        // 历史/缓存产物往往缺帧引用：用缓存还原出的真实帧清单兜底配帧
+        const cachedVision = cached.visionJson ? (JSON.parse(cached.visionJson) as VisionDoc) : undefined
+        if (cachedVision && cachedVision.frames.length > 0) {
+          const s = store.getSummary(projectId)
+          if (s && attachChapterFrames(s, cachedVision.frames) > 0) store.saveSummary(projectId, s)
+          const m = store.getMindMap(projectId)
+          if (m && attachNodeFrames(m.root, cachedVision.frames) > 0) {
+            m.updatedAt = now
+            store.saveMindMap(projectId, m)
+          }
         }
         cp = { asrModel, llmModel, visionModel, transcribeDone: true, visionDone: true, summaryDone: true, mindmapDone: true }
         saveCheckpoint()
@@ -327,7 +358,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
           transcriptText,
           getProject().title,
           (pct) => setStage('summarizing', pct, 'AI 正在生成总结…'),
-          { customPrompt, signal, model: llmModel },
+          { customPrompt, signal, model: llmModel, fallbackModel: summaryFallbackModel() },
           visionBrief
         )
         checkCancelled()
@@ -363,9 +394,19 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
     const summaryError = summaryRes.summaryError
     checkCancelled()
 
+    // 不管总结是重新生成还是断点续跑拿到的旧产物，都把真实关键帧可靠配到章节上
+    if (visionDoc.frames.length > 0 && summary.chapters.length > 0 && attachChapterFrames(summary, visionDoc.frames) > 0) {
+      store.saveSummary(projectId, summary)
+    }
+
     // ---- 6. 思维导图生成（失败不阻塞整体完成） ----
     if (store.getSummary(projectId) && visionDoc.segments.length > 0) {
       if (reuseMindmap) {
+        const mm = store.getMindMap(projectId)
+        if (mm && visionDoc.frames.length > 0 && attachNodeFrames(mm.root, visionDoc.frames) > 0) {
+          mm.updatedAt = new Date().toISOString()
+          store.saveMindMap(projectId, mm)
+        }
         setStage('mindmap', 100, '思维导图已生成（断点续跑）')
       } else {
         setStage('mindmap', 5, 'AI 正在生成思维导图…')
@@ -390,6 +431,7 @@ export async function startPipeline(projectId: string, store: Store, emit: Progr
             { customPrompt, signal, model: llmModel }
           )
           clampMindMapTimes(root, mediaDuration ?? 0)
+          attachNodeFrames(root, visionDoc.frames)
           const mmDoc = createMindMapDoc(projectId, summary.title, root)
           store.saveMindMap(projectId, mmDoc)
           cp = { ...cp, llmModel, mindmapDone: true }
@@ -494,6 +536,10 @@ async function runVisionStage(
         return { frames: [], failedCount: extracted.length, usedModel: visionModel }
       })
       frames = res.frames
+      if (frames.length === 0 && res.failedCount > 0) {
+        // 提取成功但视觉分析全部失败：静默会表现为「总结没有配图」，这里给出可诊断的告警
+        console.warn(`[pipeline] 视觉分析 ${res.failedCount}/${extracted.length} 帧失败，当前无可用关键帧信息（检查视觉模型 ${visionModel} 的可用性与配额）`)
+      }
     }
   }
 

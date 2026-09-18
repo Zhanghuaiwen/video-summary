@@ -37,10 +37,14 @@ const api = {
     ipcRenderer.invoke(IpcChannels.project.start, id),
   cancelProject: (id: string): Promise<IpcResult<{ id: string }>> =>
     ipcRenderer.invoke(IpcChannels.project.cancel, id),
+  restartProject: (id: string): Promise<IpcResult<{ id: string }>> =>
+    ipcRenderer.invoke(IpcChannels.project.restart, id),
   getTranscript: (id: string): Promise<IpcResult<string>> =>
     ipcRenderer.invoke(IpcChannels.project.getTranscript, id),
   getSummary: (id: string): Promise<IpcResult<SummaryDoc>> =>
     ipcRenderer.invoke(IpcChannels.project.getSummary, id),
+  regenerateSummary: (id: string): Promise<IpcResult<SummaryDoc>> =>
+    ipcRenderer.invoke(IpcChannels.project.regenerateSummary, id),
   getVision: (id: string): Promise<IpcResult<VisionDoc>> =>
     ipcRenderer.invoke(IpcChannels.project.getVision, id),
   openFolder: (id: string): Promise<IpcResult<{ path: string }>> =>

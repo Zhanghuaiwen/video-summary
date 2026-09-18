@@ -1,7 +1,7 @@
 import { client } from '@/api/client'
 import { useAppStore } from '@/store/appStore'
 import type { PipelineStage, Project } from '@shared/types'
-import { IconEye, IconFolderOpen, IconLink, IconPlay, IconTrash, IconVideo } from '@/components/icons'
+import { IconEye, IconFolderOpen, IconLink, IconPlay, IconRotate, IconTrash, IconVideo } from '@/components/icons'
 
 const STAGE_LABEL: Partial<Record<PipelineStage, string>> = {
   queued: '排队中',
@@ -112,6 +112,14 @@ export default function LibraryPage(): React.JSX.Element {
     }
   }
 
+  const restart = async (id: string): Promise<void> => {
+    try {
+      await client.restartProject(id)
+    } catch (err) {
+      console.error('重新分析失败', err)
+    }
+  }
+
   const openFolder = async (id: string): Promise<void> => {
     try {
       await client.openFolder(id)
@@ -199,6 +207,26 @@ export default function LibraryPage(): React.JSX.Element {
                     >
                       <IconPlay className="h-3 w-3" />
                       继续
+                    </button>
+                  )}
+                  {!isInProgress(p.stage) && (p.stage === 'done' || p.stage === 'failed') && (
+                    <button
+                      onClick={() => {
+                        if (
+                          p.stage === 'done' &&
+                          !window.confirm(
+                            '重新分析会清空该项目的总结/思维导图并从头重新生成，当前的手工修改将被覆盖；缺失/异常的媒体文件也会自动重新下载。确定继续？'
+                          )
+                        ) {
+                          return
+                        }
+                        void restart(p.id)
+                      }}
+                      title="清空已有分析结果，从头重新分析（缺失的视频将自动重新下载）"
+                      className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text)]"
+                    >
+                      <IconRotate className="h-3.5 w-3.5" />
+                      重新分析
                     </button>
                   )}
                   <button

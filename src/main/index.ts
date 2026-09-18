@@ -150,6 +150,11 @@ app.whenReady().then(() => {
   registerMediaProtocol(store)
   registerIpc(store)
 
+  // 启动时修复「mediaPath 指向纯音频 / 文件缺失」的历史项目：
+  // 在项目目录里找到完整视频写回，避免界面播放器变成无画面的音乐
+  const repaired = store.repairMediaPaths()
+  if (repaired > 0) console.log(`[main] 已修复 ${repaired} 个项目缺失/错误的视频引用`)
+
   createWindow()
 
   app.on('activate', () => {

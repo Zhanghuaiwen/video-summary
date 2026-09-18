@@ -1,7 +1,8 @@
 import { app } from 'electron'
-import { rmSync } from 'fs'
+import { rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { getDb } from './db'
+import { findBestVideoInDir, isAudioMediaPath } from './services/video'
 import type {
   CreateProjectInput,
   MindMapDoc,
@@ -36,6 +37,12 @@ export interface Store {
   getMindMap: (id: string) => MindMapDoc | undefined
   saveMindMap: (id: string, doc: MindMapDoc) => void
   hasMindMap: (id: string) => boolean
+
+  /** 修复把纯音频/缺失文件当视频的项目：在项目目录里找到完整视频并写回 mediaPath，返回修复数量 */
+  repairMediaPaths: () => number
+
+  /** 清空项目的分析产物与断点，回到 queued 状态（保留视频与配置），供「重新分析」使用 */
+  clearProjectAnalysis: (id: string) => void
 }
 
 interface ProjectRow {
@@ -126,6 +133,21 @@ export function createStore(onProjectUpdated?: (project: Project) => void): Stor
       WHERE id=?`
   )
   const stmtDelete = db.prepare('DELETE FROM projects WHERE id = ?')
+  const stmtResetAnalysis = db.prepare(
+    `UPDATE projects SET
+      transcript = NULL,
+      blocks_json = NULL,
+      summary_json = NULL,
+      vision_json = NULL,
+      mindmap_json = NULL,
+      checkpoint_json = NULL,
+      media_hash = NULL,
+      stage = 'queued',
+      progress = 0,
+      error = NULL,
+      updated_at = ?
+      WHERE id = ?`
+  )
   const stmtSetTranscript = db.prepare('UPDATE projects SET transcript = ? WHERE id = ?')
   const stmtSetBlocks = db.prepare('UPDATE projects SET blocks_json = ? WHERE id = ?')
   const stmtSetSummary = db.prepare('UPDATE projects SET summary_json = ? WHERE id = ?')
@@ -176,6 +198,37 @@ export function createStore(onProjectUpdated?: (project: Project) => void): Stor
   }
 
   const projectWorkDir = (id: string): string => join(userDataDir, 'projects', id)
+
+  const repairMediaPaths = (): number => {
+    let fixed = 0
+    for (const row of stmtList.all() as unknown as ProjectRow[]) {
+      const project = rowToProject(row)
+      const current = project.mediaPath ?? ''
+      // 已经是有效的视频文件就没必要动（本地项目引用外部视频也在此列）
+      if (current && !isAudioMediaPath(current) && existsSync(current)) continue
+      // 在项目目录里找完整视频（media.mp4 或 media.f30080.mp4 等），把纯音频/缺失改成真视频
+      const video = findBestVideoInDir(projectWorkDir(project.id))
+      if (!video || video === current) continue
+      const merged = { ...project, mediaPath: video, updatedAt: new Date().toISOString() }
+      stmtUpdate.run(
+        merged.title,
+        merged.source,
+        merged.sourceUrl ?? null,
+        merged.localPath ?? null,
+        merged.mediaPath ?? null,
+        merged.stage,
+        merged.progress,
+        merged.updatedAt,
+        merged.error ?? null,
+        merged.mediaHash ?? null,
+        merged.analysisConfig ? JSON.stringify(merged.analysisConfig) : null,
+        merged.checkpoint ? JSON.stringify(merged.checkpoint) : null,
+        project.id
+      )
+      fixed++
+    }
+    return fixed
+  }
 
   return {
     listProjects: () => (stmtList.all() as unknown as ProjectRow[]).map(rowToProject),
@@ -306,6 +359,13 @@ export function createStore(onProjectUpdated?: (project: Project) => void): Stor
       refreshFts(id)
     },
 
-    hasMindMap: (id) => Boolean(stmtHasMindmap.get(id))
+    hasMindMap: (id) => Boolean(stmtHasMindmap.get(id)),
+
+    repairMediaPaths,
+
+    clearProjectAnalysis: (id) => {
+      stmtResetAnalysis.run(new Date().toISOString(), id)
+      refreshFts(id)
+    }
   }
 }

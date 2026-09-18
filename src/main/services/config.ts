@@ -47,3 +47,16 @@ export function saveRecentPrompt(prompt: string): AppConfig {
   const list = [p, ...cur.recentPrompts.filter((x) => x !== p)].slice(0, 5)
   return setConfig({ recentPrompts: list })
 }
+
+/**
+ * 总结失败/返回空结果时自动切换的备用模型。
+ * 当用户把主模型从默认快速模型换成较慢/不稳定的模型时返回默认模型（如硅基流动的 Qwen2.5-7B-Instruct），
+ * 其它情况返回 undefined（无备用）。
+ */
+export function summaryFallbackModel(): string | undefined {
+  const cfg = getConfig()
+  if (!/siliconflow/i.test(cfg.llmBaseUrl)) return undefined
+  const primary = cfg.llmModel || DEFAULT_CONFIG.llmModel
+  if (primary === DEFAULT_CONFIG.llmModel) return undefined
+  return DEFAULT_CONFIG.llmModel
+}

@@ -8,6 +8,8 @@ interface Props {
   node: MindMapNode | null
   root: MindMapNode
   segments: TimelineSegment[]
+  /** 项目 ID：用于拼接 vsmedia:// 画面地址 */
+  projectId: string
   canJump: boolean
   onUpdate: (id: string, patch: Partial<MindMapNode>) => void
   onAddChild: (parentId: string) => void
@@ -24,6 +26,7 @@ export default function NodeDetail({
   node,
   root,
   segments,
+  projectId,
   canJump,
   onUpdate,
   onAddChild,
@@ -165,6 +168,40 @@ export default function NodeDetail({
           className={`${inputCls} resize-none`}
         />
       </label>
+
+      {node.frames && node.frames.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-[var(--text-muted)]">相关画面</span>
+          <div className="grid grid-cols-2 gap-2">
+            {node.frames.map((f, fi) => (
+              <figure
+                key={fi}
+                className="overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface-2)]"
+              >
+                <div className="relative">
+                  <img
+                    src={`vsmedia://${projectId}/${f.path}`}
+                    alt={`画面 ${f.time}s`}
+                    loading="lazy"
+                    className="aspect-video w-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.closest('figure')?.remove()
+                    }}
+                  />
+                  <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white backdrop-blur-sm">
+                    {fmtTime(f.time)}
+                  </span>
+                </div>
+                {f.ocr && (
+                  <figcaption className="line-clamp-2 px-2 py-1.5 text-[10px] leading-snug text-[var(--text-muted2)]">
+                    {f.ocr}
+                  </figcaption>
+                )}
+              </figure>
+            ))}
+          </div>
+        </div>
+      )}
 
       {node.timeRange ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3">

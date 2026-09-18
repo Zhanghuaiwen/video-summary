@@ -166,6 +166,8 @@ export interface MindMapNode {
   keywords?: string[]
   /** 关联的视频时间区间（秒），点击节点可跳转 */
   timeRange?: { start: number; end: number }
+  /** 与该节点内容直接相关的关键帧（自动配帧，用于在详情面板展示画面） */
+  frames?: FrameRef[]
   children?: MindMapNode[]
   /** 画布布局坐标（由自动布局生成或用户拖动产生） */
   x?: number
@@ -264,8 +266,10 @@ export const IpcChannels = {
     delete: 'project:delete',
     start: 'project:start',
     cancel: 'project:cancel',
+    restart: 'project:restart',
     getTranscript: 'project:get-transcript',
     getSummary: 'project:get-summary',
+    regenerateSummary: 'project:regenerate-summary',
     getVision: 'project:get-vision',
     getFrame: 'project:get-frame',
     openFolder: 'project:open-folder',

@@ -1,7 +1,7 @@
 import { app, dialog, ipcMain, BrowserWindow, shell } from 'electron'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
-import { getConfig, setConfig, saveRecentPrompt } from './services/config'
+import { getConfig, setConfig, saveRecentPrompt, summaryFallbackModel } from './services/config'
 import { startPipeline, cancelPipeline, type ProgressEmitter } from './services/pipeline'
 import { parseJson, parseOpml, parseFreeMind, parseXMindBytes, parseXMind8Xml, detectFormat, serializeJson, serializeOpml, serializeFreeMind, serializeXMind, serializeMarkdown, fromImported, EXPORT_EXTENSIONS } from './services/mindmap-formats'
 import { searchProjects } from './services/search'
@@ -17,7 +17,8 @@ import {
   type MindMapDoc,
   type MindMapExportFormat,
   type Project,
-  type SaveMindMapInput
+  type SaveMindMapInput,
+  type SummaryDoc
 } from '@shared/types'
 
 const sendProgress: ProgressEmitter = (p) => {
@@ -116,6 +117,18 @@ export function registerIpc(store: Store): void {
     })
   )
 
+  // 重新分析：清空已有产物/断点后从头跑管线
+  // （媒体文件按需修复/下载：已有完整视频直接复用，纯音频半成品自动补下）
+  ipcMain.handle(IpcChannels.project.restart, (_e, id: string) =>
+    handle(() => {
+      const project = store.getProject(id)
+      if (!project) throw new Error('项目不存在')
+      store.clearProjectAnalysis(id)
+      void startPipeline(id, store, sendProgress, { noCache: true })
+      return { id }
+    })
+  )
+
   ipcMain.handle(IpcChannels.project.getTranscript, (_e, id: string) =>
     handle(() => {
       const t = store.getTranscript(id)
@@ -129,6 +142,41 @@ export function registerIpc(store: Store): void {
       const s = store.getSummary(id)
       if (!s) throw new Error('尚无总结结果')
       return s
+    })
+  )
+
+  // 重新生成总结：仅重跑总结阶段（复用已有转写/视觉产物），不动媒体与思维导图
+  ipcMain.handle(IpcChannels.project.regenerateSummary, (_e, id: string) =>
+    handle(async (): Promise<SummaryDoc> => {
+      const project = store.getProject(id)
+      if (!project) throw new Error('项目不存在')
+      const transcriptText = store.getTranscript(id)
+      if (transcriptText == null) throw new Error('尚无转写文字稿，无法生成总结')
+      const { summarizeTranscript } = await import('./services/summarizer')
+      const { buildVisionBrief } = await import('./services/vision')
+      const { attachChapterFrames } = await import('./services/frame-attach')
+      const vision = store.getVision(id)
+      const visionBrief = vision && vision.frames.length > 0 ? buildVisionBrief(vision.frames) : undefined
+      const customPrompt = project.analysisConfig?.customPrompt?.trim() || undefined
+      const result = await summarizeTranscript(
+        transcriptText,
+        project.title,
+        (pct) =>
+          sendProgress({ projectId: id, stage: 'summarizing', progress: pct, message: '正在重新生成总结…' }),
+        { customPrompt, model: getConfig().llmModel, fallbackModel: summaryFallbackModel() },
+        visionBrief
+      )
+      const summary: SummaryDoc = { ...result, projectId: id, createdAt: new Date().toISOString() }
+      if (vision && vision.frames.length > 0 && summary.chapters.length > 0) {
+        attachChapterFrames(summary, vision.frames)
+      }
+      store.saveSummary(id, summary)
+      store.updateProject(id, {
+        checkpoint: { ...(project.checkpoint ?? {}), llmModel: getConfig().llmModel, summaryDone: true },
+        progress: 100
+      })
+      sendProgress({ projectId: id, stage: 'done', progress: 100, message: '总结已重新生成' })
+      return summary
     })
   )
 
@@ -250,6 +298,7 @@ ipcMain.handle(IpcChannels.mindmap.regenerate, (_e, projectId: string) =>
       if (!vision) throw new Error('尚无时间轴数据，无法生成思维导图')
       const { generateMindMap, createMindMapDoc, clampMindMapTimes } = await import('./services/mindmap')
       const { capTimedTranscript, buildSummaryDigest } = await import('./services/pipeline')
+      const { attachNodeFrames } = await import('./services/frame-attach')
       const { buildVisionBrief } = await import('./services/vision')
       const { probeMediaDuration } = await import('./services/video')
       const { buildTimeline } = await import('./services/timeline')
@@ -277,6 +326,7 @@ ipcMain.handle(IpcChannels.mindmap.regenerate, (_e, projectId: string) =>
         { customPrompt: project.analysisConfig?.customPrompt?.trim() || undefined, model: getConfig().llmModel }
       )
       clampMindMapTimes(root, mediaDuration ?? 0)
+      attachNodeFrames(root, vision.frames)
       const doc = createMindMapDoc(projectId, summary.title, root)
       store.saveMindMap(projectId, doc)
       store.updateProject(projectId, {

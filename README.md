@@ -13,7 +13,8 @@
 - **AI 结构化总结**：按主题划分章节，每章包含概述 + 要点；多轮「分块 → 聚合」保证长视频不丢失细节
 - **多形态输出**：总结文档（章节卡片 + 核心概述）/ 完整文字稿（双视图切换）
 - **实时进度**：下载 → 提取 → 转写 → 总结 四阶段进度条，可随时取消
-- **断点续跑**：下载 / 转写 / 视觉 / 总结 / 思维导图各阶段产物均落盘，任务失败或取消后保留进度，一键「继续」从断点续跑（模型或产物变更时自动重做相关阶段）
+- **断点续跑**：下载 / 转写 / 视觉 / 总结 / 思维导图各阶段产物均落库，任务失败或取消后保留进度，一键「继续」从断点续跑（模型或产物变更时自动重做相关阶段）
+- **本地全文检索**：标题 / 文字稿 / 总结 / 思维导图全部建入 SQLite FTS5 索引，侧边栏搜索框毫秒级返回命中位置与摘要片段（中文子串 ≥3 字符走 trigram 索引，短词自动回退全量扫描）
 - **浅色 / 深色主题**：侧边栏一键切换，界面与思维导图（画布、定位缩略图、节点加减号、控件按钮）随主题自适应
 - **B站视频可播放**：下载优先 H.264 mp4 音视频合并格式，杜绝「只下到音频」；总结页可一键「播放视频 / 打开文件夹」
 - **本地数据**：所有配置与项目历史仅保存在本机，API Key 不上传任何第三方
@@ -31,7 +32,7 @@
 | 音视频处理 | ffmpeg-static（内置二进制） |
 | 语音转写 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` |
 | 文本总结 | 硅基流动 `Qwen/Qwen2.5-7B-Instruct` |
-| 存储 | 本地 JSON 文件（`userData` 目录） |
+| 存储 | SQLite（`node:sqlite` 内置驱动，含 FTS5 全文检索） |
 
 ---
 
@@ -42,10 +43,13 @@ video-summary/
 ├─ src/
 │  ├─ main/                    # 主进程（Node.js 能力层）
 │  │  ├─ index.ts              # 应用入口、窗口创建、渲染进程日志转发
-│  │  ├─ ipc.ts                # IPC 路由注册（config/project/dialog）
-│  │  ├─ store.ts              # 项目数据存储（JSON 持久化）
+│  │  ├─ ipc.ts                # IPC 路由注册（config/project/mindmap/search）
+│  │  ├─ db.ts                 # SQLite 连接、schema、FTS5 双索引、旧数据迁移
+│  │  ├─ store.ts              # 项目/文档/设置存储（SQLite 持久化）
 │  │  └─ services/
-│  │     ├─ config.ts          # API Key / 模型配置持久化
+│  │     ├─ config.ts          # API Key / 模型配置持久化（settings 表）
+│  │     ├─ cache.ts           # 分析结果缓存（cache 表 + 帧图目录）
+│  │     ├─ search.ts          # 全文检索（FTS5 候选 + 结构化定位 + 摘要）
 │  │     ├─ process.ts         # 子进程执行封装（yt-dlp / ffmpeg）
 │  │     ├─ bin.ts             # 二进制路径解析（dev / 打包后）
 │  │     ├─ video.ts           # B站元数据获取 + 音视频下载(合并 mp4) + 进度解析
@@ -56,7 +60,7 @@ video-summary/
 │  ├─ preload/                 # contextBridge 安全桥（window.api）
 │  ├─ renderer/                # 渲染进程（React UI）
 │  │  ├─ pages/                # HomePage / LibraryPage / DocPage / MindMapPage
-│  │  ├─ components/           # Sidebar / SettingsModal
+│  │  ├─ components/           # Sidebar（含全文检索）/ SettingsModal
 │  │  ├─ store/                # Zustand 状态
 │  │  └─ api/client.ts         # IPC 调用封装
 │  └─ shared/types.ts          # 主/渲染共享类型、IPC 通道常量与默认配置
@@ -68,11 +72,13 @@ video-summary/
 
 **数据存放位置**（Electron `userData` 目录，Windows 为 `%APPDATA%/<应用名>/`）：
 
-| 文件 | 说明 |
+| 文件/位置 | 说明 |
 |---|---|
-| `config.json` | 用户配置：API Key、转写/总结模型、API Base URL |
-| `store.json` | 项目列表（标题、来源、阶段、进度） |
-| `projects/<id>/` | 每个项目的工作目录：音频、分段、`transcript.txt`、`summary.json` |
+| `video-summary.db` | SQLite 数据库：`projects`（含文字稿/总结/视觉/导图 JSON 列）、`settings`（配置）、`cache`（分析缓存）、`project_fts` + `project_fts_trgm`（全文检索索引） |
+| `projects/<id>/` | 每个项目的媒体工作目录：下载的 mp4、音频分段、关键帧图片（产物文档已迁入 SQLite，仅存大文件） |
+| `store.json` / `config.json` | 旧 JSON 存储：首次启动自动迁入 SQLite 后保留为 `*.legacy` 备份，可删除 |
+
+> 📐 详见 [docs/sqlite-storage.md](./docs/sqlite-storage.md)：schema 设计、FTS5 中文检索策略与迁移说明。
 
 ---
 
@@ -141,7 +147,7 @@ npm run package:win
    ▼
    │  ⑥ mindmap：基于完整总结 + 文字稿 + 画面/OCR 生成 3~6 层思维导图，尽量覆盖全部内容
    ▼
-   └  done：transcript.txt + summary.json + vision.json + mindmap.json 落盘，UI 可查看
+   └  done：transcript / summary / vision / mindmap 写入 SQLite（并刷新 FTS 索引），UI 可查看
 ```
 
 **设计要点：**
@@ -153,8 +159,9 @@ npm run package:win
 - 关键帧数量严格受「最多关键帧数（默认 30）」约束：固定采样 + 场景检测结果超限时均匀抽样缩减，OCR 结果再按相似度去重，控制成本与耗时
 - 所有请求自动带 `system` 提示「请用中文回答」，并强制 JSON 结构化输出（失败自动降级/修复重试）
 - 每个阶段可取消、可断点重试，失败信息带服务端原始返回便于排查
-- **断点续跑**：各阶段完成后把产物（`media.mp4` / `blocks.json` / `transcript.txt` / `vision.json` / `summary.json` / `mindmap.json`）与所用模型写入项目 `checkpoint`；失败/取消后项目显示「已暂停」，点「继续」按 `checkpoint` 跳过已完成阶段，仅重跑未完成部分
+- **断点续跑**：各阶段完成后把产物（`media.mp4` / 转写 / 视觉 / 总结 / 思维导图）与所用模型写入项目 `checkpoint`；产物存在性与模型匹配决定跳过/重做，失败/取消后项目显示「已暂停」，点「继续」按 `checkpoint` 跳过已完成阶段，仅重跑未完成部分
 - **并行加速**：关键帧提取与转写同时进行（都只依赖媒体文件）；转写完成后先做视觉分析（OCR+画面描述），再顺次生成总结（总结要引用画面/OCR 信息），最后生成思维导图
+- **全文检索**：每次写回文字稿/总结/导图即重建对应 FTS 行；检索时以 trigram/unicode61 双索引取候选（bm25 排序），再做结构化定位（章节/节点）给出摘要片段，见 docs/sqlite-storage.md
 
 ---
 
@@ -164,8 +171,9 @@ npm run package:win
 |---|---|---|
 | W1 | Electron + Vite + React 骨架，IPC 安全桥 | ✅ 完成 |
 | W2 | 下载 → 提取 → 转写 → 总结全管线 + 进度上报 | ✅ 完成 |
-| W3 | 思维导图（React Flow）+ Markdown 导出 | ⏳ 待做 |
-| W4 | electron-builder 打包 + SQLite 历史库 | ⏳ 待做 |
+| W3 | 思维导图（React Flow）+ Markdown 导出 | ✅ 完成 |
+| W4 | SQLite 历史库（node:sqlite + FTS5 全文检索） | ✅ 完成 |
+| W5 | electron-builder 打包 + 自动更新 | ⏳ 待做 |
 
 ---
 

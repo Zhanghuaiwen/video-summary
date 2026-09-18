@@ -55,10 +55,6 @@ export interface Project {
   analysisConfig?: AnalysisConfig
   /** 断点续跑记录（任务失败/取消后保留，点击「继续」从已完成阶段续跑） */
   checkpoint?: ProjectCheckpoint
-  transcriptPath?: string
-  summaryPath?: string
-  visionPath?: string
-  mindmapPath?: string
 }
 
 export interface ChapterPoint {
@@ -236,6 +232,22 @@ export interface ExportMindMapInput {
   format: MindMapExportFormat
 }
 
+/** 全文检索命中的内容位置 */
+export type SearchLocation = 'title' | 'transcript' | 'summary' | 'mindmap'
+
+/** 全文检索结果：一次命中对应「项目 + 所在文档结构」，附一段可读摘要 */
+export interface ProjectSearchHit {
+  projectId: string
+  title: string
+  location: SearchLocation
+  /** 命中文本附近的一段摘要 */
+  snippet: string
+  /** location === 'summary' 时，命中所在的章节标题 */
+  chapterTitle?: string
+  /** location === 'mindmap' 时，命中的节点标题 */
+  nodeTitle?: string
+}
+
 export const IpcChannels = {
   appInfo: 'app:info',
   config: {
@@ -266,6 +278,9 @@ export const IpcChannels = {
     import: 'mindmap:import',
     regenerate: 'mindmap:regenerate',
     recent: 'mindmap:recent'
+  },
+  search: {
+    query: 'search:query'
   },
   events: {
     progress: 'project:progress',

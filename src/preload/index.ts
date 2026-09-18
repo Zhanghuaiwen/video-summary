@@ -11,6 +11,7 @@ import {
   type ProgressPayload,
   type ProjectUpdatedPayload,
   type Project,
+  type ProjectSearchHit,
   type SaveMindMapInput,
   type SummaryDoc,
   type VisionDoc
@@ -58,6 +59,9 @@ const api = {
     ipcRenderer.invoke(IpcChannels.mindmap.regenerate, projectId),
   mindmapRecent: (): Promise<IpcResult<{ id: string; title: string; updatedAt: string }[]>> =>
     ipcRenderer.invoke(IpcChannels.mindmap.recent),
+
+  searchProjects: (query: string): Promise<IpcResult<ProjectSearchHit[]>> =>
+    ipcRenderer.invoke(IpcChannels.search.query, query),
 
   onProgress: (cb: (payload: ProgressPayload) => void): (() => void) => {
     const listener = (_e: unknown, payload: ProgressPayload): void => cb(payload)

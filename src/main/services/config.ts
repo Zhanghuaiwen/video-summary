@@ -1,13 +1,9 @@
-import { app } from 'electron'
-import { readFileSync, writeFileSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { getDb } from '../db'
 import { DEFAULT_CONFIG, type AppConfig } from '@shared/types'
 
 let cache: AppConfig | null = null
 
-function configFile(): string {
-  return join(app.getPath('userData'), 'config.json')
-}
+const KEY = 'app'
 
 function sanitizeConfig(raw: Partial<AppConfig>): AppConfig {
   const base = { ...DEFAULT_CONFIG, ...raw }
@@ -25,8 +21,10 @@ function sanitizeConfig(raw: Partial<AppConfig>): AppConfig {
 export function getConfig(): AppConfig {
   if (cache) return cache
   try {
-    const saved = JSON.parse(readFileSync(configFile(), 'utf-8')) as Partial<AppConfig>
-    cache = sanitizeConfig(saved)
+    const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(KEY) as
+      | { value: string }
+      | undefined
+    cache = sanitizeConfig(row ? (JSON.parse(row.value) as Partial<AppConfig>) : {})
   } catch {
     cache = { ...DEFAULT_CONFIG }
   }
@@ -35,8 +33,9 @@ export function getConfig(): AppConfig {
 
 export function setConfig(patch: Partial<AppConfig>): AppConfig {
   const next = sanitizeConfig({ ...getConfig(), ...patch })
-  mkdirSync(app.getPath('userData'), { recursive: true })
-  writeFileSync(configFile(), JSON.stringify(next, null, 2), 'utf-8')
+  getDb()
+    .prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(KEY, JSON.stringify(next))
   cache = next
   return next
 }

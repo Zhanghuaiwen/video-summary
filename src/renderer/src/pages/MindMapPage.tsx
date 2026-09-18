@@ -103,7 +103,7 @@ export default function MindMapPage(): React.JSX.Element {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, project?.stage, project?.mindmapPath])
+  }, [selectedId, project?.stage, project?.updatedAt])
 
   // ---------- 自动保存（防抖 2.2s） ----------
   const saveNow = useCallback(async (): Promise<void> => {

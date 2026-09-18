@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useAppStore, type PageKey } from "@/store/appStore";
 import { client } from "@/api/client";
 import { applyAccent } from "@/App";
+import type { ProjectSearchHit, SearchLocation } from "@shared/types";
 import {
   IconFileText,
   IconFolderOpen,
@@ -8,8 +10,10 @@ import {
   IconLogo,
   IconMoon,
   IconNewDoc,
+  IconSearch,
   IconSettings,
   IconSun,
+  IconX,
 } from "@/components/icons";
 
 const NAV_ITEMS: {
@@ -38,6 +42,127 @@ const NAV_ITEMS: {
     icon: (cls = "h-4 w-4 shrink-0") => <IconGitBranch className={cls} />,
   },
 ];
+
+const LOCATION_LABEL: Record<SearchLocation, string> = {
+  title: "标题",
+  transcript: "文字稿",
+  summary: "总结",
+  mindmap: "导图",
+};
+
+let searchTimer: number | undefined;
+
+function ProjectSearch(): React.JSX.Element {
+  const setSelectedProject = useAppStore((s) => s.setSelectedProject);
+  const setPage = useAppStore((s) => s.setPage);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<ProjectSearchHit[] | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const run = async (query: string): Promise<void> => {
+    try {
+      setResults(await client.searchProjects(query));
+    } catch {
+      setResults([]);
+    }
+  };
+
+  const onChange = (v: string): void => {
+    setQ(v);
+    window.clearTimeout(searchTimer);
+    if (!v.trim()) {
+      setResults(null);
+      return;
+    }
+    searchTimer = window.setTimeout(() => void run(v.trim()), 300);
+  };
+
+  const goto = (h: ProjectSearchHit): void => {
+    setSelectedProject(h.projectId);
+    setPage(h.location === "mindmap" ? "mindmap" : "doc");
+    setQ("");
+    setResults(null);
+    setOpen(false);
+  };
+
+  const show = open && q.trim().length > 0;
+
+  return (
+    <div className="relative px-3 pb-3">
+      <div className="relative">
+        <IconSearch className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-faint)]" />
+        <input
+          value={q}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => {
+            setOpen(true);
+          }}
+          onBlur={() => {
+            window.setTimeout(() => setOpen(false), 150);
+          }}
+          placeholder="搜索总结 / 导图 / 文字稿…"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] py-1.5 pl-8 pr-7 text-xs text-[var(--text)] outline-none transition-colors placeholder:text-[var(--text-faint)] focus:border-[var(--accent-solid)]"
+        />
+        {q && (
+          <button
+            onClick={() => {
+              setQ("");
+              setResults(null);
+            }}
+            title="清空"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-faint)] transition-colors hover:text-[var(--text-muted)]"
+          >
+            <IconX className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {show && (
+        <div className="absolute left-3 right-3 top-full z-40 mt-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xl shadow-black/10 [box-shadow:var(--popover-shadow)]">
+          <div className="max-h-80 overflow-y-auto p-1.5">
+            {results === null && (
+              <div className="px-3 py-2 text-xs text-[var(--text-faint)]">
+                正在搜索…
+              </div>
+            )}
+            {results !== null && results.length === 0 && (
+              <div className="px-3 py-2 text-xs text-[var(--text-faint)]">
+                未找到相关内容
+              </div>
+            )}
+            {results?.map((h, i) => (
+              <button
+                key={`${h.projectId}-${i}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  goto(h);
+                }}
+                className="flex w-full flex-col gap-1 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[var(--surface-3)]"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-xs font-medium text-[var(--text-strong)]">
+                    {h.title}
+                  </span>
+                  <span className="ml-auto shrink-0 rounded-full bg-[var(--accent-bg)] px-1.5 py-px text-[10px] font-medium text-[var(--accent-text)]">
+                    {LOCATION_LABEL[h.location]}
+                  </span>
+                </span>
+                {(h.chapterTitle || h.nodeTitle) && (
+                  <span className="truncate text-[11px] text-[var(--text-dim)]">
+                    {h.chapterTitle ?? h.nodeTitle}
+                  </span>
+                )}
+                <span className="line-clamp-2 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                  {h.snippet}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Sidebar(): React.JSX.Element {
   const page = useAppStore((s) => s.page);
@@ -86,6 +211,8 @@ export default function Sidebar(): React.JSX.Element {
           </div>
         </div>
       </div>
+
+      <ProjectSearch />
 
       <nav className="flex flex-1 flex-col gap-1 px-3">
         {NAV_ITEMS.map((item) => {

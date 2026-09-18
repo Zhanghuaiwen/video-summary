@@ -1,4 +1,4 @@
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import ffmpegPath from 'ffmpeg-static'
 import { runCommand } from './process'
@@ -58,6 +58,10 @@ export async function downloadMedia(url: string, workDir: string, onProgress: (p
       'bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
       '--merge-output-format',
       'mp4',
+      // yt-dlp 合并音视频需要 ffmpeg；系统 PATH 里通常没有，
+      // 必须显式指向本项目内置的 ffmpeg-static，否则合并失败只剩部分文件
+      '--ffmpeg-location',
+      dirname(ffmpegPath),
       '--no-playlist',
       '--encoding',
       'utf-8',
@@ -83,6 +87,12 @@ export async function downloadMedia(url: string, workDir: string, onProgress: (p
   const merged = join(workDir, 'media.mp4')
   if (existsSync(merged)) return merged
   const dests = [...res.stdout.matchAll(/\[download\] Destination:\s+(.+)/g)].map((m) => m[1].trim())
+  // 合并失败（如缺 ffmpeg）时残留的是 media.f30080.mp4 + media.f30280.m4a 两部分文件。
+  // 必须优先选「视频」部分而不是盲目取最后一条 Destination（那往往是音频 m4a），
+  // 否则 mediaPath 变成纯音频 → 界面播放器显示成无画面的音频。
+  const VIDEO_EXT_RE = /\.(mp4|webm|mkv|mov|m4v)$/i
+  const videoDst = dests.find((d) => VIDEO_EXT_RE.test(d) && existsSync(d))
+  if (videoDst) return videoDst
   const last = dests[dests.length - 1]
   if (last && existsSync(last)) return last
   return merged

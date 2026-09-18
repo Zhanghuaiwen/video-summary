@@ -56,6 +56,13 @@ export const IconGitBranch = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
+export const IconSearch = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+  </Svg>
+)
+
 export const IconSun = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="4" />

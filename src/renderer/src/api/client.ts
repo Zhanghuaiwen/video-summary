@@ -7,6 +7,7 @@ import type {
   MindMapDoc,
   MindMapExportFormat,
   ProgressPayload,
+  ProjectSearchHit,
   ProjectUpdatedPayload,
   SaveMindMapInput
 } from '@shared/types'
@@ -41,6 +42,8 @@ export const client = {
   mindmapImport: (projectId: string) => invoke(() => window.api.mindmapImport(projectId)),
   mindmapRegenerate: (projectId: string) => invoke(() => window.api.mindmapRegenerate(projectId)),
   mindmapRecent: () => invoke(() => window.api.mindmapRecent()),
+
+  searchProjects: (query: string): Promise<ProjectSearchHit[]> => invoke(() => window.api.searchProjects(query)),
 
   onProgress: (cb: (payload: ProgressPayload) => void): (() => void) => window.api.onProgress(cb),
 
